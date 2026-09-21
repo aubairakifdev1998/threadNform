@@ -39,12 +39,12 @@ import type { ProductSummary } from "@/types/api";
 
 type Warehouse = { id: string; name: string; code?: string };
 type InventoryRow = {
-  id?: string;
+  id: string;
   variantId: string;
   warehouseId: string;
-  onHand?: number;
-  available?: number;
-  reserved?: number;
+  onHand: number;
+  available: number;
+  reserved: number;
   sku?: string | null;
   productId?: string | null;
   productName?: string | null;
@@ -102,8 +102,7 @@ export function AdminInventoryPanel() {
 
       // Inventory is product→variant scoped; drop any row without a product link.
       const linkedRows = (inv.items ?? []).filter(
-        (row): row is InventoryRow & { productId: string } =>
-          Boolean(row.productId),
+        (row) => typeof row.productId === "string" && row.productId.length > 0,
       );
       setRows(linkedRows);
 
@@ -121,7 +120,9 @@ export function AdminInventoryPanel() {
   }
 
   useEffect(() => {
-    void load();
+    queueMicrotask(() => {
+      void load();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -1,25 +1,30 @@
 import 'reflect-metadata';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Express } from 'express';
+import serverless from 'serverless-http';
 import { NestFactory } from '@nestjs/core';
 import { createNestApp } from './bootstrap.js';
 
 // Keep a direct @nestjs/core import for platform entrypoint detection.
 void NestFactory;
 
-let cachedExpress: Express | null = null;
-let initPromise: Promise<Express> | null = null;
+type ServerlessHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<unknown> | unknown;
 
-async function getExpressApp(): Promise<Express> {
-  if (cachedExpress) return cachedExpress;
+let cachedHandler: ServerlessHandler | null = null;
+let initPromise: Promise<ServerlessHandler> | null = null;
+
+async function getHandler(): Promise<ServerlessHandler> {
+  if (cachedHandler) return cachedHandler;
   if (!initPromise) {
     initPromise = createNestApp()
       .then(({ expressApp }) => {
-        cachedExpress = expressApp;
-        return expressApp;
+        const wrapped = serverless(expressApp) as ServerlessHandler;
+        cachedHandler = wrapped;
+        return wrapped;
       })
       .catch((error) => {
-        // Allow the next invocation to retry after a failed cold start
         initPromise = null;
         throw error;
       });
@@ -28,16 +33,15 @@ async function getExpressApp(): Promise<Express> {
 }
 
 /**
- * Vercel serverless entry. Keep cold-start failures visible in function logs
- * (missing env vars, DB, etc.) — those previously surfaced only as CORS errors.
+ * Vercel serverless entry. Boot failures are caught by api/index.js as well.
  */
 export default async function handler(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
   try {
-    const server = await getExpressApp();
-    server(req, res);
+    const run = await getHandler();
+    await run(req, res);
   } catch (error) {
     console.error('[vercel] Nest bootstrap failed', error);
     if (!res.headersSent) {
@@ -65,7 +69,12 @@ export default async function handler(
               error instanceof Error
                 ? error.message
                 : 'Backend failed to start',
-            details: {},
+            details: {
+              stack:
+                error instanceof Error
+                  ? error.stack?.split('\n').slice(0, 8)
+                  : undefined,
+            },
           },
         }),
       );

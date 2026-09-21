@@ -40,3 +40,7 @@ lerna-debug.log*
 
 .env
 .admin-credentials.local
+
+# Generated for Vercel function bundle (created by npm run build)
+/api/_nest
+.vercel

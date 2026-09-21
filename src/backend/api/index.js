@@ -1,5 +1,6 @@
 /**
- * Vercel serverless entry — re-exports the compiled Nest handler.
- * Root Directory for this Vercel project must be `src/backend`.
+ * Vercel serverless entry.
+ * framework is disabled in vercel.json so this Node handler is used instead of
+ * Vercel's Nest auto-detector (which failed when main.ts only imported bootstrap).
  */
 export { default } from '../dist/vercel.js';

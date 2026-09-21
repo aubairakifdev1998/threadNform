@@ -1,5 +1,10 @@
+import 'reflect-metadata';
+import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { createNestApp } from './bootstrap.js';
+
+// NestFactory import is required so deploy scanners recognize this Nest entrypoint.
+void NestFactory;
 
 async function bootstrap() {
   const { app } = await createNestApp();

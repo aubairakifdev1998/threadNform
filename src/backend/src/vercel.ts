@@ -1,6 +1,11 @@
+import 'reflect-metadata';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Express } from 'express';
+import { NestFactory } from '@nestjs/core';
 import { createNestApp } from './bootstrap.js';
+
+// Keep a direct @nestjs/core import for platform entrypoint detection.
+void NestFactory;
 
 let cachedExpress: Express | null = null;
 let initPromise: Promise<Express> | null = null;

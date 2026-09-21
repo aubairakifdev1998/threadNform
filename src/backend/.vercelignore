@@ -1,0 +1,9 @@
+node_modules
+.api/_nest
+api/_nest
+dist
+.env
+.admin-credentials.local
+coverage
+test
+*.tsbuildinfo

@@ -1,0 +1,28 @@
+<!--
+  Paste into Supabase Dashboard → Authentication → Email Templates → Confirm signup
+
+  Subject line (set next to the template):
+    Confirm your Thread N Form account
+
+  Also set:
+  - Authentication → URL Configuration → Site URL = http://localhost:3001
+  - Redirect URLs include http://localhost:3001/auth/callback
+  - Authentication → Emails → Sender name = Thread N Form
+    (this replaces "Supabase Auth" in Gmail)
+  - Optional custom SMTP: From Name = Thread N Form
+-->
+<h2 style="font-family: Georgia, serif; font-size: 28px; letter-spacing: -0.03em; color: #141414; margin: 0 0 12px;">
+  Confirm your Thread N Form account
+</h2>
+<p style="font-family: system-ui, sans-serif; font-size: 15px; line-height: 1.6; color: #555; margin: 0 0 24px;">
+  Thanks for joining <strong>Thread N Form</strong>. Confirm your email to finish signing up and start shopping.
+</p>
+<p style="margin: 0 0 28px;">
+  <a href="{{ .ConfirmationURL }}"
+     style="display:inline-block;background:#141414;color:#f7f5f0;text-decoration:none;padding:14px 22px;font-family:system-ui,sans-serif;font-size:14px;font-weight:600;letter-spacing:0.02em;">
+    Confirm email address
+  </a>
+</p>
+<p style="font-family: system-ui, sans-serif; font-size: 12px; line-height: 1.5; color: #888; margin: 0;">
+  If you didn’t create an account with Thread N Form, you can ignore this email.
+</p>

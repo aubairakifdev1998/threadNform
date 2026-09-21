@@ -106,6 +106,31 @@ Money is **integer pence**. Inventory uses Postgres RPCs with row locks. Payment
 
 OpenAPI UI: `http://localhost:3000/api/v1/docs`
 
+## Vercel (production API)
+
+Root Directory for the backend project must be `src/backend`.
+
+Deploy uses `vercel.json` + `api/index.js` (serverless Nest handler). Required **Vercel Environment Variables** (Production):
+
+| Variable | Example |
+|----------|---------|
+| `DATABASE_URL` | Supabase pooler URI |
+| `SUPABASE_URL` | `https://….supabase.co` |
+| `SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_…` |
+| `SUPABASE_SECRET_KEY` | `sb_secret_…` |
+| `FRONTEND_URL` | `https://thread-nform-txkk.vercel.app` |
+| `CORS_ORIGINS` | `https://thread-nform-txkk.vercel.app` (+ localhost if needed) |
+| `CART_TOKEN_SECRET` | long random secret |
+| `API_PREFIX` | `api/v1` |
+
+Without these, the function crashes on cold start (`FUNCTION_INVOCATION_FAILED`) and browsers report a **CORS** error because no Nest response (and no CORS headers) is returned.
+
+After setting env vars, redeploy the backend project, then confirm:
+
+```bash
+curl -s https://thread-nform.vercel.app/api/v1/health
+```
+
 ## Admin bootstrap
 
 Owner credentials (local only) are written to `.admin-credentials.local` (gitignored).

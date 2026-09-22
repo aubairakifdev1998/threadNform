@@ -1,7 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ConfigModule } from '@nestjs/config';
 import configuration from './infrastructure/config/configuration.js';
 import { validateEnv } from './infrastructure/config/env.validation.js';
 import { DrizzleModule } from './infrastructure/drizzle/drizzle.module.js';
@@ -18,28 +16,14 @@ import { StorageModule } from './presentation/storage/storage.module.js';
       load: [configuration],
       validate: validateEnv,
     }),
-    ThrottlerModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => [
-        {
-          ttl: config.get<number>('throttle.ttlMs') ?? 60_000,
-          limit: config.get<number>('throttle.limit') ?? 120,
-        },
-      ],
-    }),
+    // @nestjs/throttler is still CommonJS and breaks Nest 12 ESM on Vercel's
+    // Node runtime (ERR_REQUIRE_ESM). Re-add when an ESM build ships.
     DrizzleModule,
     SupabaseModule,
     AuthModule,
     CommerceModule,
     StorageModule,
     HealthModule,
-  ],
-  providers: [
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerGuard,
-    },
   ],
 })
 export class AppModule {}

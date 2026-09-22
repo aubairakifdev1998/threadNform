@@ -1,28 +1,22 @@
 import 'reflect-metadata';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import serverless from 'serverless-http';
+import type { Express } from 'express';
 import { NestFactory } from '@nestjs/core';
 import { createNestApp } from './bootstrap.js';
 
 // Keep a direct @nestjs/core import for platform entrypoint detection.
 void NestFactory;
 
-type ServerlessHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-) => Promise<unknown> | unknown;
+let cachedExpress: Express | null = null;
+let initPromise: Promise<Express> | null = null;
 
-let cachedHandler: ServerlessHandler | null = null;
-let initPromise: Promise<ServerlessHandler> | null = null;
-
-async function getHandler(): Promise<ServerlessHandler> {
-  if (cachedHandler) return cachedHandler;
+async function getExpressApp(): Promise<Express> {
+  if (cachedExpress) return cachedExpress;
   if (!initPromise) {
     initPromise = createNestApp()
       .then(({ expressApp }) => {
-        const wrapped = serverless(expressApp) as ServerlessHandler;
-        cachedHandler = wrapped;
-        return wrapped;
+        cachedExpress = expressApp;
+        return expressApp;
       })
       .catch((error) => {
         initPromise = null;
@@ -33,15 +27,16 @@ async function getHandler(): Promise<ServerlessHandler> {
 }
 
 /**
- * Vercel serverless entry. Boot failures are caught by api/index.js as well.
+ * Vercel Node serverless entry. Express is a valid (req, res) listener —
+ * do not wrap with serverless-http (AWS Lambda adapter); that hangs on Vercel.
  */
 export default async function handler(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
   try {
-    const run = await getHandler();
-    await run(req, res);
+    const server = await getExpressApp();
+    server(req, res);
   } catch (error) {
     console.error('[vercel] Nest bootstrap failed', error);
     if (!res.headersSent) {

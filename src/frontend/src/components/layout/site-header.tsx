@@ -51,19 +51,19 @@ export function SiteHeader() {
         className={cn(
           "mx-auto transition-all duration-300",
           compact
-            ? "max-w-5xl px-3 pt-3"
+            ? "max-w-5xl px-3 pt-2 sm:pt-3"
             : "max-w-7xl px-0 pt-0",
         )}
       >
         <div
           className={cn(
-            "relative flex items-center justify-between gap-4 border-border/70 bg-background/85 backdrop-blur-md transition-all duration-300",
+            "relative grid grid-cols-[1fr_auto_1fr] items-center border-border/70 bg-background/85 backdrop-blur-md transition-all duration-300",
             compact
-              ? "h-14 rounded-full border px-5 shadow-sm shadow-foreground/5"
-              : "h-16 border-b px-4 sm:px-6 lg:px-8",
+              ? "h-12 rounded-full border px-3 shadow-sm shadow-foreground/5 sm:h-14 sm:px-5"
+              : "h-14 border-b px-3 sm:h-16 sm:px-6 lg:px-8",
           )}
         >
-          <div className="flex items-center gap-5">
+          <div className="flex items-center justify-start gap-3 sm:gap-5">
             <MobileNavigation links={navLinks} />
             <nav className="hidden items-center gap-6 md:flex" aria-label="Primary">
               {navLinks.map((link) => (
@@ -85,16 +85,16 @@ export function SiteHeader() {
 
           <Link
             href="/"
-            className="absolute left-1/2 flex -translate-x-1/2 items-center gap-2"
+            className="flex max-w-[46vw] items-center justify-center gap-1.5 sm:max-w-none sm:gap-2"
             aria-label={BRAND.name}
           >
-            <BrandMark className="size-5 sm:size-6" />
-            <span className="brand-wordmark text-[0.95rem] sm:text-lg">
+            <BrandMark className="size-5 shrink-0 sm:size-6" />
+            <span className="brand-wordmark truncate text-[0.85rem] sm:text-lg">
               {BRAND.name}
             </span>
           </Link>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-end gap-0.5 sm:gap-1.5">
             <Link
               href="/search"
               aria-label="Search"
@@ -111,10 +111,13 @@ export function SiteHeader() {
             </Link>
             <Link
               href="/cart"
-              className="inline-flex h-9 items-center gap-2 rounded-full bg-foreground px-3.5 text-xs font-medium tracking-wide text-background transition hover:opacity-90"
+              className="inline-flex size-9 items-center justify-center rounded-full bg-foreground text-background transition hover:opacity-90 sm:h-9 sm:w-auto sm:gap-2 sm:px-3.5"
+              aria-label="Cart"
             >
               <ShoppingBag className="size-3.5" />
-              <span className="hidden sm:inline">Cart</span>
+              <span className="hidden text-xs font-medium tracking-wide sm:inline">
+                Cart
+              </span>
             </Link>
             <Link
               href="/account"

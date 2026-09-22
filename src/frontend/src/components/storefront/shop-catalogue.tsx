@@ -160,7 +160,7 @@ export function ShopCatalogue({
           <span className="text-foreground">Products</span>
         </p>
         <div className="flex flex-wrap items-end justify-between gap-4">
-          <h1 className="heading-display text-4xl sm:text-5xl md:text-6xl">
+          <h1 className="heading-display text-[clamp(2rem,9vw,3.75rem)] leading-[1.05] sm:text-5xl md:text-6xl">
             Products
           </h1>
           <p className="text-sm text-muted-foreground">

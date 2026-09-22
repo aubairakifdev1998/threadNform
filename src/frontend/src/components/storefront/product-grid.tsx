@@ -10,7 +10,7 @@ export function ProductGrid({
 }) {
   if (!products.length) {
     return (
-      <p className="py-16 text-center text-sm text-muted-foreground">
+      <p className="px-2 py-10 text-center text-sm leading-relaxed text-muted-foreground sm:py-16">
         {emptyMessage}
       </p>
     );

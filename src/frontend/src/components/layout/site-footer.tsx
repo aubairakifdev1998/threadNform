@@ -49,7 +49,7 @@ export function SiteFooter() {
         <div className="md:col-span-1">
           <div className="flex items-center gap-2.5">
             <BrandMark className="size-7" />
-            <p className="brand-wordmark text-2xl">{BRAND.name}</p>
+            <p className="brand-wordmark text-xl sm:text-2xl">{BRAND.name}</p>
           </div>
           <p className="mt-4 max-w-xs text-sm leading-relaxed text-muted-foreground">
             {BRAND.tagline}

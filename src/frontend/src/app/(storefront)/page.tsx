@@ -130,10 +130,10 @@ export default async function HomePage() {
         posterUrl={billboard?.posterUrl}
       />
 
-      <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h2 className="heading-display text-3xl sm:text-4xl md:text-5xl">
+      <section className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+          <div className="min-w-0 flex-1">
+            <h2 className="heading-display text-[clamp(1.75rem,7vw,3rem)] leading-[1.05] sm:text-4xl md:text-5xl">
               <TextGenerateEffect words="Latest pieces" />
             </h2>
             <p className="mt-3 max-w-md text-sm text-muted-foreground">
@@ -142,13 +142,13 @@ export default async function HomePage() {
           </div>
           <Link
             href="/shop"
-            className="text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            className="shrink-0 self-start whitespace-nowrap text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline sm:self-auto sm:pb-1"
           >
             See all
           </Link>
         </div>
 
-        <div className="mt-12">
+        <div className="mt-8 sm:mt-12">
           <ProductGrid
             products={products}
             emptyMessage="Publish products in Admin → Products to show them here."
@@ -156,11 +156,13 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-y border-border bg-secondary/40 py-20">
+      <section className="border-y border-border bg-secondary/40 py-12 sm:py-16 lg:py-20">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="mb-8">
-            <h2 className="heading-display text-3xl sm:text-4xl">Shop by</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
+          <div className="mb-6 sm:mb-8">
+            <h2 className="heading-display text-[clamp(1.75rem,7vw,2.5rem)] leading-[1.05] sm:text-4xl">
+              Shop by
+            </h2>
+            <p className="mt-2 max-w-lg text-sm text-muted-foreground">
               Driven by departments and categories configured in admin.
             </p>
           </div>
@@ -173,7 +175,7 @@ export default async function HomePage() {
               <Link
                 key={`${item.href}-${item.label}`}
                 href={item.href}
-                className="group relative flex min-h-56 flex-col justify-end overflow-hidden bg-background p-8 transition"
+                className="group relative flex min-h-48 flex-col justify-end overflow-hidden bg-background p-6 transition sm:min-h-56 sm:p-8"
               >
                 {item.imageUrl ? (
                   <>
@@ -196,7 +198,7 @@ export default async function HomePage() {
                   {item.caption}
                 </span>
                 <span
-                  className={`heading-display relative z-10 mt-2 text-3xl transition-transform duration-500 group-hover:translate-x-1 ${
+                  className={`heading-display relative z-10 mt-2 text-2xl leading-tight transition-transform duration-500 group-hover:translate-x-1 sm:text-3xl ${
                     item.imageUrl ? "text-white" : "text-foreground"
                   }`}
                 >
@@ -210,22 +212,24 @@ export default async function HomePage() {
 
       <ReviewsSection reviews={reviews} />
 
-      <section className="surface-grain relative overflow-hidden py-24">
+      <section className="surface-grain relative overflow-hidden py-16 sm:py-24">
         <div className="relative mx-auto max-w-3xl px-4 text-center sm:px-6">
-          <p className="brand-wordmark text-4xl sm:text-5xl">{BRAND.name}</p>
+          <p className="brand-wordmark text-[clamp(1.75rem,8vw,3rem)] sm:text-5xl">
+            {BRAND.name}
+          </p>
           <p className="mx-auto mt-5 max-w-md text-sm leading-relaxed text-muted-foreground">
             {BRAND.description}
           </p>
-          <div className="mt-10 flex justify-center">
+          <div className="mt-8 flex justify-center sm:mt-10">
             <Link
               href="/shop"
-              className="relative inline-flex overflow-hidden p-px"
+              className="relative inline-flex w-full max-w-xs overflow-hidden p-px sm:w-auto sm:max-w-none"
             >
               <span
                 className="absolute inset-[-100%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_90deg_at_50%_50%,transparent_0%,oklch(0.35_0.02_265)_50%,transparent_100%)] opacity-70 motion-reduce:hidden"
                 aria-hidden
               />
-              <span className="relative z-10 inline-flex h-12 items-center bg-foreground px-8 text-sm font-medium tracking-wide text-background">
+              <span className="relative z-10 inline-flex h-12 w-full items-center justify-center bg-foreground px-8 text-sm font-medium tracking-wide text-background sm:w-auto">
                 Enter the store →
               </span>
             </Link>

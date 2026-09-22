@@ -7,13 +7,13 @@ export function ReviewsSection({ reviews }: { reviews: CustomerReview[] }) {
   }
 
   return (
-    <section className="border-y border-border bg-background py-20">
+    <section className="border-y border-border bg-background py-12 sm:py-16 lg:py-20">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="max-w-2xl">
           <p className="text-[0.7rem] uppercase tracking-[0.2em] text-muted-foreground">
             Reviews
           </p>
-          <h2 className="heading-display mt-2 text-3xl sm:text-4xl md:text-5xl">
+          <h2 className="heading-display mt-2 text-[clamp(1.75rem,7vw,3rem)] leading-[1.05] sm:text-4xl md:text-5xl">
             Worn & reviewed
           </h2>
           <p className="mt-3 text-sm text-muted-foreground">

@@ -344,26 +344,26 @@ export function HeroSpotlight({
         </>
       )}
 
-      <div className="relative z-10 mx-auto grid min-h-[88svh] max-w-7xl items-end gap-10 px-4 pb-16 pt-28 sm:px-6 lg:grid-cols-12 lg:px-8 lg:pb-20">
+      <div className="relative z-10 mx-auto grid min-h-[min(88svh,920px)] max-w-7xl items-end gap-8 px-4 pb-12 pt-24 sm:gap-10 sm:px-6 sm:pb-16 sm:pt-28 lg:grid-cols-12 lg:px-8 lg:pb-20">
         <motion.div
           initial={reduceMotion ? false : { opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-          className="lg:col-span-7"
+          className="min-w-0 lg:col-span-7"
         >
-          <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">
+          <p className="text-[0.65rem] font-medium uppercase tracking-[0.18em] text-muted-foreground sm:text-[0.7rem] sm:tracking-[0.22em]">
             {seasonLabel}
           </p>
-          <h1 className="heading-display mt-4 text-[clamp(2.75rem,9vw,5.5rem)] leading-[0.92] text-foreground">
+          <h1 className="heading-display mt-3 text-[clamp(2.1rem,10vw,5.5rem)] leading-[0.95] text-foreground sm:mt-4 sm:leading-[0.92]">
             <TextGenerateEffect words={title ?? "New Collection"} />
           </h1>
-          <p className="mt-6 max-w-md text-base leading-relaxed text-muted-foreground">
+          <p className="mt-4 max-w-md text-sm leading-relaxed text-muted-foreground sm:mt-6 sm:text-base">
             {subtitle}
           </p>
-          <div className="mt-10 flex flex-wrap items-center gap-4">
+          <div className="mt-8 flex w-full flex-col gap-3 sm:mt-10 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
             <Link
               href={primaryHref}
-              className="inline-flex h-12 items-center gap-3 bg-foreground px-7 text-sm font-medium tracking-wide text-background transition hover:opacity-90"
+              className="inline-flex h-12 w-full items-center justify-center gap-3 bg-foreground px-7 text-sm font-medium tracking-wide text-background transition hover:opacity-90 sm:w-auto"
             >
               {primaryLabel}
               <span aria-hidden>→</span>
@@ -371,7 +371,7 @@ export function HeroSpotlight({
             {secondaryHref && secondaryLabel ? (
               <Link
                 href={secondaryHref}
-                className="inline-flex h-12 items-center border border-border px-7 text-sm font-medium tracking-wide text-foreground transition hover:border-foreground"
+                className="inline-flex h-12 w-full items-center justify-center border border-border px-7 text-sm font-medium tracking-wide text-foreground transition hover:border-foreground sm:w-auto"
               >
                 {secondaryLabel}
               </Link>

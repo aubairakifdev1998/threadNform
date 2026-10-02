@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Auto-memoizes components and hooks (React 19), replacing most manual
+  // useMemo / useCallback / React.memo.
+  reactCompiler: true,
   images: {
     remotePatterns: [
       {

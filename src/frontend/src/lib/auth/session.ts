@@ -1,3 +1,5 @@
+import { clearQueryCache } from "@/lib/query/query-client";
+
 const ACCESS_TOKEN_KEY = "threadnform_access_token";
 const REFRESH_TOKEN_KEY = "threadnform_refresh_token";
 const GUEST_CART_ID_KEY = "threadnform_guest_cart_id";
@@ -25,6 +27,7 @@ export const tokenStore = {
     if (!canUseStorage()) return;
     localStorage.removeItem(ACCESS_TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
+    clearQueryCache();
   },
 };
 

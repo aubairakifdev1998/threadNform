@@ -1,13 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
-import {
-  AdminListPagination,
-  paginateItems,
-} from "@/components/admin/admin-list-pagination";
+import { AdminListPagination } from "@/components/admin/admin-list-pagination";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,57 +17,49 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { adminApi } from "@/lib/api";
-import { ApiError } from "@/lib/api/client";
-import { tokenStore } from "@/lib/auth/session";
+import {
+  errorMessage,
+  useAdminMutation,
+  useAdminProducts,
+  useErrorToast,
+} from "@/lib/query/admin";
 import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { AdminTableShimmer } from "@/components/ui/page-shimmers";
 import type { ProductSummary } from "@/types/api";
 
+const PAGE_SIZE = 10;
+/** Everything except ARCHIVED, filtered server-side so pages stay full. */
+const LIVE_STATUSES = "DRAFT,ACTIVE,INACTIVE";
+
 export function AdminProductsPanel() {
-  const [items, setItems] = useState<ProductSummary[]>([]);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
 
-  async function load() {
-    const token = tokenStore.getAccessToken();
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      const result = await adminApi.listProducts(token, { pageSize: 50 });
-      setItems(
-        (result?.items ?? []).filter(
-          (p) => (p as { status?: string }).status !== "ARCHIVED",
-        ),
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Failed to load products",
-      );
-      setItems([]);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const products = useAdminProducts({
+    page,
+    pageSize: PAGE_SIZE,
+    status: LIVE_STATUSES,
+  });
+  useErrorToast(products.error, "Failed to load products");
+  const items: ProductSummary[] = products.isError
+    ? []
+    : (products.data?.items ?? []);
+  const total = products.isError ? 0 : (products.data?.total ?? items.length);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  useEffect(() => {
-    void load();
-  }, []);
+  const activateMutation = useAdminMutation((token, id: string) =>
+    adminApi.updateProduct(token, id, { status: "ACTIVE" }),
+  );
+  const archiveMutation = useAdminMutation((token, id: string) =>
+    adminApi.deleteProduct(token, id),
+  );
 
   async function activate(id: string) {
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
     try {
-      await adminApi.updateProduct(token, id, { status: "ACTIVE" });
+      await activateMutation.mutateAsync(id);
       toast.success("Product activated");
-      await load();
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Could not activate",
-      );
+      toast.error(errorMessage(error, "Could not activate"));
     }
   }
 
@@ -78,24 +67,20 @@ export function AdminProductsPanel() {
     if (!window.confirm(`Archive “${name}”? It will leave the storefront.`)) {
       return;
     }
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
     try {
-      const result = await adminApi.deleteProduct(token, id);
+      const result = await archiveMutation.mutateAsync(id);
       toast.success(
         result.stockRowsRemoved > 0
           ? `Product archived · ${result.stockRowsRemoved} stock row(s) removed`
           : "Product archived",
       );
-      await load();
+      // Archiving the last row on a page: step back so the page isn't empty.
+      if (items.length === 1 && page > 1) setPage(page - 1);
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Could not delete",
-      );
+      toast.error(errorMessage(error, "Could not delete"));
     }
   }
 
-  const paged = paginateItems(items, page, 10);
 
   return (
     <div className="space-y-6">
@@ -109,7 +94,7 @@ export function AdminProductsPanel() {
         }
       />
 
-      {loading ? (
+      {products.isPending ? (
         <AdminTableShimmer />
       ) : (
         <Card>
@@ -135,7 +120,7 @@ export function AdminProductsPanel() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paged.items.map((product) => {
+                  items.map((product) => {
                     const status =
                       (product as { status?: string }).status ?? "—";
                     return (
@@ -210,12 +195,12 @@ export function AdminProductsPanel() {
           </CardContent>
         </Card>
       )}
-      {!loading && items.length > 0 ? (
+      {!products.isPending && total > 0 ? (
         <AdminListPagination
-          page={paged.page}
-          totalPages={paged.totalPages}
-          total={paged.total}
-          pageSize={10}
+          page={Math.min(page, totalPages)}
+          totalPages={totalPages}
+          total={total}
+          pageSize={PAGE_SIZE}
           onPageChange={setPage}
         />
       ) : null}

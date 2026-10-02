@@ -1,6 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -27,8 +32,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { adminApi } from "@/lib/api";
-import { ApiError } from "@/lib/api/client";
-import { tokenStore } from "@/lib/auth/session";
+import {
+  adminKeys,
+  errorMessage,
+  requireAccessToken,
+  useAdminMutation,
+  useAdminOrders,
+  useErrorToast,
+} from "@/lib/query/admin";
 import { formatGbp } from "@/lib/money";
 import { formatDate } from "@/lib/orders/presentation";
 import { cn } from "@/lib/utils";
@@ -108,104 +119,68 @@ function primaryAction(order: OrderSummary) {
 export function AdminOrdersPanel() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [items, setItems] = useState<OrderSummary[]>([]);
-  const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabKey>("all");
-  const [counts, setCounts] = useState<Partial<Record<TabKey, number>>>({});
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
   // The open order lives in the URL (?review=<id>) so links and refresh work.
   const reviewId = searchParams.get("review");
 
-  const fetchPage = useCallback(async () => {
-    const token = tokenStore.getAccessToken();
-    if (!token)
-      throw new ApiError("Sign in required", {
-        code: "UNAUTHORIZED",
-        status: 401,
-      });
-    const filter = TABS.find((t) => t.key === tab)?.filter ?? {};
-    const [result, ...tabTotals] = await Promise.all([
-      adminApi.listOrders(token, {
-        ...filter,
-        q: search || undefined,
-        page,
-        pageSize: PAGE_SIZE,
-      }),
-      ...TABS.map((t) =>
-        adminApi
-          .listOrders(token, {
-            ...t.filter,
-            q: search || undefined,
-            pageSize: 1,
-          })
-          .then((r) => r.total ?? 0)
-          .catch(() => undefined),
-      ),
-    ]);
-    return {
-      items: result?.items ?? [],
-      total: result?.total ?? 0,
-      counts: Object.fromEntries(
-        TABS.map((t, i) => [t.key, tabTotals[i]]),
-      ) as Partial<Record<TabKey, number>>,
-    };
-  }, [tab, search, page]);
-
-  const apply = useCallback(
-    (
-      outcome:
-        | { ok: true; data: Awaited<ReturnType<typeof fetchPage>> }
-        | { ok: false; error: unknown },
-    ) => {
-      if (outcome.ok) {
-        setItems(outcome.data.items);
-        setTotal(outcome.data.total);
-        setCounts(outcome.data.counts);
-      } else {
-        toast.error(
-          outcome.error instanceof ApiError
-            ? outcome.error.message
-            : "Failed to load orders",
-        );
-        setItems([]);
-      }
-      setLoading(false);
+  const filter = TABS.find((t) => t.key === tab)?.filter ?? {};
+  const orders = useAdminOrders({
+    ...filter,
+    q: search || undefined,
+    page,
+    pageSize: PAGE_SIZE,
+  });
+  useErrorToast(orders.error, "Failed to load orders");
+  // Tab totals depend only on the search, so paging and tab switches reuse them.
+  const tabCounts = useQuery({
+    queryKey: adminKeys.orderCounts(search),
+    queryFn: async () => {
+      const token = requireAccessToken();
+      const totals = await Promise.all(
+        TABS.map((t) =>
+          adminApi
+            .listOrders(token, {
+              ...t.filter,
+              q: search || undefined,
+              pageSize: 1,
+            })
+            .then((r) => r.total ?? 0)
+            .catch(() => undefined),
+        ),
+      );
+      return Object.fromEntries(
+        TABS.map((t, i) => [t.key, totals[i]]),
+      ) as Partial<Record<TabKey, number>>;
     },
-    [],
+    placeholderData: keepPreviousData,
+  });
+
+  const items: OrderSummary[] = orders.isError ? [] : (orders.data?.items ?? []);
+  const total = orders.data?.total ?? 0;
+  const counts = tabCounts.data ?? {};
+  // Filter changes show the shimmer until the new page arrives; revisiting a
+  // cached tab or page renders instantly.
+  const loading = orders.isPending || orders.isPlaceholderData;
+
+  const queryClient = useQueryClient();
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: adminKeys.all });
+
+  const transitionMutation = useAdminMutation(
+    (token, vars: { id: string; status: string; note?: string }) =>
+      adminApi.transitionOrder(token, vars.id, {
+        status: vars.status,
+        note: vars.note,
+      }),
+  );
+  const deleteMutation = useAdminMutation((token, id: string) =>
+    adminApi.deleteOrder(token, id),
   );
 
-  /** Reload after an action (outside the effect). */
-  const load = useCallback(async () => {
-    try {
-      apply({ ok: true, data: await fetchPage() });
-    } catch (error) {
-      apply({ ok: false, error });
-    }
-  }, [fetchPage, apply]);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchPage().then(
-      (data) => !cancelled && apply({ ok: true, data }),
-      (error: unknown) => !cancelled && apply({ ok: false, error }),
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchPage, apply]);
-
-  /** Filter changes show the shimmer until the new page arrives. */
-  function changeQuery(update: () => void) {
-    setLoading(true);
-    update();
-  }
-
   async function transition(id: string, status: string) {
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
     let note: string | undefined;
     if (status === "CANCELLED") {
       const reason = window.prompt(
@@ -219,15 +194,14 @@ export function AdminOrdersPanel() {
       note = reason.trim();
     }
     try {
-      await adminApi.transitionOrder(token, id, { status, note });
+      await transitionMutation.mutateAsync({ id, status, note });
       toast.success(
         status === "CANCELLED"
           ? "Order cancelled — stock released"
           : "Order updated",
       );
-      await load();
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Update failed");
+      toast.error(errorMessage(error, "Update failed"));
     }
   }
 
@@ -239,14 +213,12 @@ export function AdminOrdersPanel() {
     ) {
       return;
     }
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
     try {
-      await adminApi.deleteOrder(token, id);
+      await deleteMutation.mutateAsync(id);
       toast.success("Order deleted");
-      await load();
+      if (items.length === 1 && page > 1) setPage(page - 1);
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Delete failed");
+      toast.error(errorMessage(error, "Delete failed"));
     }
   }
 
@@ -326,12 +298,10 @@ export function AdminOrdersPanel() {
               role="tab"
               type="button"
               aria-selected={tab === t.key}
-              onClick={() =>
-                changeQuery(() => {
-                  setTab(t.key);
-                  setPage(1);
-                })
-              }
+              onClick={() => {
+                setTab(t.key);
+                setPage(1);
+              }}
               className={cn(
                 "inline-flex h-9 shrink-0 items-center gap-2 rounded-md border px-3 text-sm transition",
                 tab === t.key
@@ -361,10 +331,8 @@ export function AdminOrdersPanel() {
           className="relative w-full md:max-w-sm"
           onSubmit={(e) => {
             e.preventDefault();
-            changeQuery(() => {
-              setSearch(searchDraft.trim());
-              setPage(1);
-            });
+            setSearch(searchDraft.trim());
+            setPage(1);
           }}
         >
           <Search
@@ -395,12 +363,10 @@ export function AdminOrdersPanel() {
               <button
                 type="button"
                 className="ml-2 underline underline-offset-4"
-                onClick={() =>
-                  changeQuery(() => {
-                    setSearch("");
-                    setSearchDraft("");
-                  })
-                }
+                onClick={() => {
+                  setSearch("");
+                  setSearchDraft("");
+                }}
               >
                 Clear search
               </button>
@@ -508,7 +474,7 @@ export function AdminOrdersPanel() {
             totalPages={totalPages}
             total={total}
             pageSize={PAGE_SIZE}
-            onPageChange={(next) => changeQuery(() => setPage(next))}
+            onPageChange={setPage}
           />
         </>
       )}
@@ -525,7 +491,7 @@ export function AdminOrdersPanel() {
         orderId={reviewId}
         open={Boolean(reviewId)}
         onOpenChange={closeReview}
-        onChanged={() => void load()}
+        onChanged={() => void refresh()}
       />
     </div>
   );

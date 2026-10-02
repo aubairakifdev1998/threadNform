@@ -1,12 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
-import {
-  AdminListPagination,
-  paginateItems,
-} from "@/components/admin/admin-list-pagination";
+import { AdminListPagination } from "@/components/admin/admin-list-pagination";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,19 +22,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { adminApi } from "@/lib/api";
-import { ApiError } from "@/lib/api/client";
-import { tokenStore } from "@/lib/auth/session";
+import {
+  errorMessage,
+  useAdminCustomer,
+  useAdminCustomers,
+  useAdminMutation,
+  useErrorToast,
+  type CustomerRow,
+} from "@/lib/query/admin";
 import { formatGbp } from "@/lib/money";
 import { ListBlockShimmer } from "@/components/ui/page-shimmers";
-
-type CustomerRow = {
-  id: string;
-  email: string;
-  fullName?: string | null;
-  phone?: string | null;
-  status?: string;
-  createdAt?: string;
-};
 
 type CustomerDetail = CustomerRow & {
   orderCount?: number;
@@ -50,67 +44,42 @@ type CustomerDetail = CustomerRow & {
   }>;
 };
 
+const PAGE_SIZE = 10;
+
 export function AdminCustomersPanel() {
-  const [items, setItems] = useState<CustomerRow[]>([]);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<CustomerDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
-    setLoading(true);
-    try {
-      const result = await adminApi.listCustomers(token, { pageSize: 100 });
-      const rows = Array.isArray(result)
-        ? result
-        : ((result as { items?: CustomerRow[] }).items ?? []);
-      setItems(rows as CustomerRow[]);
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Failed to load customers",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const customers = useAdminCustomers({ page, pageSize: PAGE_SIZE });
+  useErrorToast(customers.error, "Failed to load customers");
+  const items: CustomerRow[] = customers.data?.items ?? [];
+  const total = customers.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const customerDetail = useAdminCustomer(selectedId);
+  useErrorToast(customerDetail.error, "Failed to load customer");
+  const detail: CustomerDetail | null = customerDetail.data ?? null;
+  const detailLoading = customerDetail.isFetching && !customerDetail.data;
 
-  async function openDetail(id: string) {
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
+  const statusMutation = useAdminMutation(
+    (token, vars: { id: string; status: "ACTIVE" | "BLOCKED" }) =>
+      adminApi.setCustomerStatus(token, vars.id, vars.status),
+  );
+  const deleteMutation = useAdminMutation((token, id: string) =>
+    adminApi.deleteCustomer(token, id, { deleteOrders: true }),
+  );
+
+  function openDetail(id: string) {
     setSelectedId(id);
-    setDetailLoading(true);
-    try {
-      const data = await adminApi.getCustomer(token, id);
-      setDetail(data);
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Failed to load customer",
-      );
-    } finally {
-      setDetailLoading(false);
-    }
   }
 
   async function toggleBlock(customer: CustomerRow) {
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
     const next = customer.status === "BLOCKED" ? "ACTIVE" : "BLOCKED";
     try {
-      await adminApi.setCustomerStatus(token, customer.id, next);
+      await statusMutation.mutateAsync({ id: customer.id, status: next });
       toast.success(next === "BLOCKED" ? "Customer blocked" : "Customer unblocked");
-      await load();
-      if (selectedId === customer.id) await openDetail(customer.id);
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Status update failed",
-      );
+      toast.error(errorMessage(error, "Status update failed"));
     }
   }
 
@@ -122,22 +91,16 @@ export function AdminCustomersPanel() {
     ) {
       return;
     }
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
     try {
-      await adminApi.deleteCustomer(token, customer.id, { deleteOrders: true });
+      await deleteMutation.mutateAsync(customer.id);
       toast.success("Customer and related history deleted");
-      setSelectedId(null);
-      setDetail(null);
-      await load();
+      if (selectedId === customer.id) setSelectedId(null);
+      if (items.length === 1 && page > 1) setPage(page - 1);
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Delete failed",
-      );
+      toast.error(errorMessage(error, "Delete failed"));
     }
   }
 
-  const paged = paginateItems(items, page, 10);
 
   return (
     <div className="space-y-6">
@@ -147,7 +110,7 @@ export function AdminCustomersPanel() {
       />
 
       <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
-        {loading ? (
+        {customers.isPending ? (
           <ListBlockShimmer />
         ) : (
           <Card>
@@ -171,7 +134,7 @@ export function AdminCustomersPanel() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    paged.items.map((c) => (
+                    items.map((c) => (
                       <TableRow
                         key={c.id}
                         data-state={selectedId === c.id ? "selected" : undefined}
@@ -180,7 +143,7 @@ export function AdminCustomersPanel() {
                           <button
                             type="button"
                             className="text-left"
-                            onClick={() => void openDetail(c.id)}
+                            onClick={() => openDetail(c.id)}
                           >
                             <p className="font-medium">
                               {c.fullName ?? "—"}
@@ -204,7 +167,7 @@ export function AdminCustomersPanel() {
                             type="button"
                             size="sm"
                             variant="outline"
-                            onClick={() => void openDetail(c.id)}
+                            onClick={() => openDetail(c.id)}
                           >
                             View
                           </Button>
@@ -303,12 +266,12 @@ export function AdminCustomersPanel() {
         </Card>
       </div>
 
-      {!loading && items.length > 0 ? (
+      {!customers.isPending && total > 0 ? (
         <AdminListPagination
-          page={paged.page}
-          totalPages={paged.totalPages}
-          total={paged.total}
-          pageSize={10}
+          page={Math.min(page, totalPages)}
+          totalPages={totalPages}
+          total={total}
+          pageSize={PAGE_SIZE}
           onPageChange={setPage}
         />
       ) : null}

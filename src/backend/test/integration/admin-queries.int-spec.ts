@@ -4,6 +4,7 @@ import {
   bearer,
   createAdmin,
   createHarness,
+  createProduct,
   type Harness,
   type TestUser,
 } from './harness.js';
@@ -27,5 +28,27 @@ describe('Admin list filters & search', () => {
   ])('QRY %s is accepted', async (path) => {
     const res = await h.http().get(`${API}/${path}`).set(bearer(owner));
     expect(res.status, JSON.stringify(res.body)).toBe(200);
+  });
+
+  it('QRY admin/products accepts a comma-separated status list', async () => {
+    const p = await createProduct(h, owner);
+    await h.db.query(
+      `update public.products set status = 'ARCHIVED' where id = $1`,
+      [p.productId],
+    );
+    const ids = async (status: string) => {
+      const res = await h
+        .http()
+        .get(`${API}/admin/products`)
+        .query({ status, pageSize: 100 })
+        .set(bearer(owner));
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      return (res.body.data.items as Array<{ id: string; status: string }>);
+    };
+    const live = await ids('DRAFT,ACTIVE,INACTIVE');
+    expect(live.map((i) => i.id)).not.toContain(p.productId);
+    expect(live.every((i) => i.status !== 'ARCHIVED')).toBe(true);
+    expect((await ids('ARCHIVED')).map((i) => i.id)).toContain(p.productId);
+    expect(await ids('NOT_A_STATUS')).toEqual([]);
   });
 });

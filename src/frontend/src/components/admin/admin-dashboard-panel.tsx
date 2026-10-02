@@ -1,8 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { toast } from "sonner";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
 import {
   Card,
@@ -12,9 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { buttonVariants } from "@/components/ui/button";
-import { adminApi } from "@/lib/api";
-import { ApiError } from "@/lib/api/client";
-import { tokenStore } from "@/lib/auth/session";
+import { useAdminDashboard, useErrorToast } from "@/lib/query/admin";
 import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import {
@@ -46,27 +42,11 @@ const tiles = [
 ];
 
 export function AdminDashboardPanel() {
-  const [stats, setStats] = useState<AdminDashboard | null>(null);
-  const [loading, setLoading] = useState(true);
+  const dashboard = useAdminDashboard();
+  useErrorToast(dashboard.error, "Failed to load dashboard");
+  const stats: AdminDashboard | null = dashboard.data ?? null;
 
-  useEffect(() => {
-    const token = tokenStore.getAccessToken();
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-    adminApi
-      .dashboard(token)
-      .then(setStats)
-      .catch((error) => {
-        toast.error(
-          error instanceof ApiError ? error.message : "Failed to load dashboard",
-        );
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
+  if (dashboard.isPending) {
     return <AdminDashboardShimmer />;
   }
 

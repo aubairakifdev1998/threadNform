@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -31,8 +31,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { adminApi } from "@/lib/api";
-import { ApiError } from "@/lib/api/client";
-import { tokenStore } from "@/lib/auth/session";
+import {
+  errorMessage,
+  useAdminInventory,
+  useAdminMutation,
+  useAdminProducts,
+  useErrorToast,
+  useProductVariants,
+  useWarehouses,
+} from "@/lib/query/admin";
 import { cn } from "@/lib/utils";
 import { ListBlockShimmer } from "@/components/ui/page-shimmers";
 import type { ProductSummary } from "@/types/api";
@@ -58,112 +65,73 @@ type VariantOption = {
   available: number;
 };
 
+const NO_PRODUCTS: ProductSummary[] = [];
+
 export function AdminInventoryPanel() {
   const searchParams = useSearchParams();
   const initialProductId = searchParams.get("productId") ?? "";
 
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [rows, setRows] = useState<InventoryRow[]>([]);
-  const [products, setProducts] = useState<ProductSummary[]>([]);
-  const [variants, setVariants] = useState<VariantOption[]>([]);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [warehouseId, setWarehouseId] = useState("");
+  const [selectedWarehouseId, setWarehouseId] = useState("");
   const [productId, setProductId] = useState(initialProductId);
-  const [variantId, setVariantId] = useState("");
+  const [selectedVariantId, setVariantId] = useState("");
   const [onHandDelta, setOnHandDelta] = useState(10);
   const [reason, setReason] = useState("Restock");
-  const [saving, setSaving] = useState(false);
   const [filterProductId, setFilterProductId] = useState<string>(
     initialProductId || "all",
   );
 
-  async function load() {
-    const token = tokenStore.getAccessToken();
-    if (!token) {
-      setLoading(false);
-      toast.error("Sign in required");
-      return;
-    }
-    setLoading(true);
-    try {
-      const [wh, inv, productList] = await Promise.all([
-        adminApi.listWarehouses(token),
-        adminApi.listInventory(token, { pageSize: 200 }),
-        adminApi.listProducts(token, { pageSize: 100 }),
-      ]);
-      const warehouseList = Array.isArray(wh)
-        ? wh
-        : ((wh as { items?: Warehouse[] }).items ?? []);
-      setWarehouses(warehouseList as Warehouse[]);
-      if (!warehouseId && warehouseList[0]) {
-        setWarehouseId((warehouseList[0] as Warehouse).id);
-      }
+  const warehouseQuery = useWarehouses<Warehouse>();
+  const inventoryQuery = useAdminInventory();
+  const productQuery = useAdminProducts({
+    page: 1,
+    pageSize: 100,
+    status: "DRAFT,ACTIVE,INACTIVE",
+  });
+  const variantQuery = useProductVariants(productId);
+  useErrorToast(
+    warehouseQuery.error ?? inventoryQuery.error ?? productQuery.error,
+    "Failed to load inventory",
+  );
+  useErrorToast(variantQuery.error, "Failed to load product variants");
+  const loading =
+    warehouseQuery.isPending || inventoryQuery.isPending || productQuery.isPending;
 
-      // Inventory is product→variant scoped; drop any row without a product link.
-      const linkedRows = (inv.items ?? []).filter(
+  const warehouses = warehouseQuery.data ?? [];
+  // Default to the first warehouse until the admin picks one.
+  const warehouseId = selectedWarehouseId || warehouses[0]?.id || "";
+
+  // Inventory is product→variant scoped; drop any row without a product link.
+  const rows: InventoryRow[] = useMemo(
+    () =>
+      (inventoryQuery.data?.items ?? []).filter(
         (row) => typeof row.productId === "string" && row.productId.length > 0,
-      );
-      setRows(linkedRows);
+      ),
+    [inventoryQuery.data],
+  );
+  const products: ProductSummary[] = productQuery.data?.items ?? NO_PRODUCTS;
 
-      const liveProducts = (productList.items ?? []).filter(
-        (p) => (p as { status?: string }).status !== "ARCHIVED",
-      );
-      setProducts(liveProducts);
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Failed to load inventory",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
+  const variants: VariantOption[] = useMemo(
+    () =>
+      productId
+        ? (variantQuery.data ?? []).filter((v) => v.status !== "ARCHIVED")
+        : [],
+    [productId, variantQuery.data],
+  );
+  // Keep the chosen variant if it belongs to this product, else the first one.
+  const variantId = variants.some((v) => v.id === selectedVariantId)
+    ? selectedVariantId
+    : (variants[0]?.id ?? "");
 
-  useEffect(() => {
-    queueMicrotask(() => {
-      void load();
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadVariants() {
-      const token = tokenStore.getAccessToken();
-      if (!token || !productId) {
-        setVariants([]);
-        setVariantId("");
-        return;
-      }
-      try {
-        const list = await adminApi.listProductVariants(token, productId);
-        if (cancelled) return;
-        const active = list.filter((v) => v.status !== "ARCHIVED");
-        setVariants(active);
-        setVariantId((current) =>
-          active.some((v) => v.id === current) ? current : (active[0]?.id ?? ""),
-        );
-      } catch (error) {
-        if (!cancelled) {
-          setVariants([]);
-          toast.error(
-            error instanceof ApiError
-              ? error.message
-              : "Failed to load product variants",
-          );
-        }
-      }
-    }
-    void loadVariants();
-    return () => {
-      cancelled = true;
-    };
-  }, [productId]);
+  const adjustMutation = useAdminMutation(
+    (token, body: Parameters<typeof adminApi.adjustInventory>[1]) =>
+      adminApi.adjustInventory(token, body),
+  );
+  const saving = adjustMutation.isPending;
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const token = tokenStore.getAccessToken();
-    if (!token || !warehouseId || !variantId) {
+    if (!warehouseId || !variantId) {
       toast.error("Select a product variant and warehouse");
       return;
     }
@@ -171,22 +139,16 @@ export function AdminInventoryPanel() {
       toast.error("Enter a non-zero stock change");
       return;
     }
-    setSaving(true);
     try {
-      await adminApi.adjustInventory(token, {
+      await adjustMutation.mutateAsync({
         warehouseId,
         variantId,
         onHandDelta,
         reason: reason.trim() || "Restock",
       });
       toast.success("Stock updated for product variant");
-      await load();
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Adjustment failed",
-      );
-    } finally {
-      setSaving(false);
+      toast.error(errorMessage(error, "Adjustment failed"));
     }
   }
 

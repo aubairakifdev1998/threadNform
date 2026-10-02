@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
@@ -22,7 +22,13 @@ import {
 } from "@/components/ui/card";
 import { adminApi } from "@/lib/api";
 import { ApiError } from "@/lib/api/client";
-import { tokenStore } from "@/lib/auth/session";
+import {
+  errorMessage,
+  useAdminMutation,
+  useBankAccounts,
+  useErrorToast,
+  usePaymentQueue,
+} from "@/lib/query/admin";
 import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { ListBlockShimmer } from "@/components/ui/page-shimmers";
@@ -89,113 +95,86 @@ const PAGE_SIZE_OPTIONS = [5, 10, 20] as const;
 const REVIEWABLE = new Set(["PROOF_SUBMITTED", "UNDER_REVIEW"]);
 
 export function AdminPaymentsPanel() {
-  const [items, setItems] = useState<PaymentQueueItem[]>([]);
-  const [banks, setBanks] = useState<BankAccount[]>([]);
-  const [loading, setLoading] = useState(true);
   const [rejectReason, setRejectReason] = useState<Record<string, string>>({});
   const [bankForm, setBankForm] = useState(emptyBank);
   const [editingBankId, setEditingBankId] = useState<string | null>(null);
-  const [savingBank, setSavingBank] = useState(false);
-  // Bank details are OWNER-only; other roles get a 403 from the API.
-  const [bankOwnerOnly, setBankOwnerOnly] = useState(false);
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [total, setTotal] = useState(0);
   const [status, setStatus] = useState("queue");
   const [hasProof, setHasProof] = useState<"all" | "true" | "false">("all");
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
 
+  const queue = usePaymentQueue({
+    page,
+    pageSize,
+    status,
+    q: search || undefined,
+    hasProof,
+  });
+  useErrorToast(queue.error, "Failed to load payments");
+  const items: PaymentQueueItem[] = queue.isError ? [] : (queue.data?.items ?? []);
+  const total = queue.isError ? 0 : (queue.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const loadBanks = useCallback(async (token: string) => {
-    try {
-      const accounts = await adminApi.listBankAccounts(token);
-      setBankOwnerOnly(false);
-      setBanks(Array.isArray(accounts) ? accounts : []);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 403) {
-        setBankOwnerOnly(true);
-      } else {
-        toast.error(
-          error instanceof ApiError
-            ? error.message
-            : "Failed to load bank accounts",
-        );
-      }
-      setBanks([]);
-    }
-  }, []);
+  const bankQuery = useBankAccounts();
+  // Bank details are OWNER-only; other roles get a 403 from the API.
+  const bankOwnerOnly =
+    bankQuery.error instanceof ApiError && bankQuery.error.status === 403;
+  useErrorToast(bankQuery.error, "Failed to load bank accounts", {
+    ignoreStatus: 403,
+  });
+  const banks: BankAccount[] = bankQuery.data ?? [];
 
-  const loadQueue = useCallback(async () => {
-    const token = tokenStore.getAccessToken();
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      const queue = await adminApi.listPaymentQueue(token, {
-        page,
-        pageSize,
-        status,
-        q: search || undefined,
-        hasProof,
-      });
-      setItems(queue?.items ?? []);
-      setTotal(queue?.total ?? 0);
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Failed to load payments",
-      );
-      setItems([]);
-      setTotal(0);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, pageSize, status, search, hasProof]);
-
-  useEffect(() => {
-    const token = tokenStore.getAccessToken();
-    if (token) void loadBanks(token);
-  }, [loadBanks]);
-
-  useEffect(() => {
-    void loadQueue();
-  }, [loadQueue]);
+  const approveMutation = useAdminMutation((token, id: string) =>
+    adminApi.approvePayment(token, id, crypto.randomUUID()),
+  );
+  const rejectMutation = useAdminMutation(
+    (token, vars: { id: string; reason: string }) =>
+      adminApi.rejectPayment(token, vars.id, vars.reason),
+  );
+  const saveBankMutation = useAdminMutation(
+    (token, body: Parameters<typeof adminApi.upsertBankAccount>[1]) =>
+      adminApi.upsertBankAccount(token, body),
+  );
+  const activateBankMutation = useAdminMutation((token, id: string) =>
+    adminApi.activateBankAccount(token, id),
+  );
 
   async function approve(id: string) {
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
     try {
-      await adminApi.approvePayment(token, id, crypto.randomUUID());
+      await approveMutation.mutateAsync(id);
       toast.success("Payment approved — order confirmed");
-      await loadQueue();
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Approve failed");
+      toast.error(errorMessage(error, "Approve failed"));
     }
   }
 
   async function reject(id: string) {
-    const token = tokenStore.getAccessToken();
     const reason = rejectReason[id]?.trim();
-    if (!token || !reason) {
+    if (!reason) {
       toast.error("Provide a rejection reason");
       return;
     }
     try {
-      await adminApi.rejectPayment(token, id, reason);
+      await rejectMutation.mutateAsync({ id, reason });
       toast.success("Payment rejected — customer can re-upload proof");
-      await loadQueue();
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Reject failed");
+      toast.error(errorMessage(error, "Reject failed"));
+    }
+  }
+
+  async function activateBank(id: string) {
+    try {
+      await activateBankMutation.mutateAsync(id);
+      toast.success("Bank account activated");
+    } catch (error) {
+      toast.error(errorMessage(error, "Unable to activate bank account"));
     }
   }
 
   async function saveBank() {
-    const token = tokenStore.getAccessToken();
-    if (!token) return;
     if (
       !bankForm.bankName.trim() ||
       !bankForm.accountName.trim() ||
@@ -207,9 +186,8 @@ export function AdminPaymentsPanel() {
       );
       return;
     }
-    setSavingBank(true);
     try {
-      await adminApi.upsertBankAccount(token, {
+      await saveBankMutation.mutateAsync({
         id: editingBankId ?? undefined,
         bankName: bankForm.bankName.trim(),
         accountName: bankForm.accountName.trim(),
@@ -224,15 +202,8 @@ export function AdminPaymentsPanel() {
       );
       setBankForm(emptyBank);
       setEditingBankId(null);
-      await loadBanks(token);
     } catch (error) {
-      toast.error(
-        error instanceof ApiError
-          ? error.message
-          : "Unable to save bank details",
-      );
-    } finally {
-      setSavingBank(false);
+      toast.error(errorMessage(error, "Unable to save bank details"));
     }
   }
 
@@ -317,16 +288,8 @@ export function AdminPaymentsPanel() {
                           <Button
                             type="button"
                             size="sm"
-                            onClick={async () => {
-                              const token = tokenStore.getAccessToken();
-                              if (!token) return;
-                              await adminApi.activateBankAccount(
-                                token,
-                                bank.id,
-                              );
-                              toast.success("Bank account activated");
-                              await loadBanks(token);
-                            }}
+                            disabled={activateBankMutation.isPending}
+                            onClick={() => void activateBank(bank.id)}
                           >
                             Activate
                           </Button>
@@ -390,10 +353,10 @@ export function AdminPaymentsPanel() {
             <CardFooter className="gap-2">
               <Button
                 type="button"
-                disabled={savingBank}
+                disabled={saveBankMutation.isPending}
                 onClick={() => void saveBank()}
               >
-                {savingBank
+                {saveBankMutation.isPending
                   ? "Saving…"
                   : editingBankId
                     ? "Update bank details"
@@ -496,7 +459,7 @@ export function AdminPaymentsPanel() {
           </CardContent>
         </Card>
 
-        {loading ? (
+        {queue.isPending ? (
           <ListBlockShimmer rows={4} />
         ) : items.length === 0 ? (
           <Card>
@@ -625,7 +588,9 @@ export function AdminPaymentsPanel() {
                         <Button
                           type="button"
                           size="sm"
-                          disabled={item.proofs.length === 0}
+                          disabled={
+                            item.proofs.length === 0 || approveMutation.isPending
+                          }
                           onClick={() => void approve(item.id)}
                         >
                           Approve & confirm order
@@ -645,7 +610,9 @@ export function AdminPaymentsPanel() {
                           type="button"
                           size="sm"
                           variant="outline"
-                          disabled={item.proofs.length === 0}
+                          disabled={
+                            item.proofs.length === 0 || rejectMutation.isPending
+                          }
                           onClick={() => void reject(item.id)}
                         >
                           Reject
@@ -675,7 +642,7 @@ export function AdminPaymentsPanel() {
           </div>
         )}
 
-        {!loading && total > 0 ? (
+        {!queue.isPending && total > 0 ? (
           <AdminListPagination
             page={Math.min(page, totalPages)}
             totalPages={totalPages}

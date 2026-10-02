@@ -55,6 +55,13 @@ import {
   vatRates,
 } from '../../drizzle/schema/index.js';
 
+const PRODUCT_STATUSES = new Set<CommerceProduct['status']>([
+  'DRAFT',
+  'ACTIVE',
+  'INACTIVE',
+  'ARCHIVED',
+]);
+
 @Injectable()
 export class SupabaseCatalogRepository implements CatalogRepository {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -317,10 +324,18 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     // as one statement, instead of shipping id lists through Node.
     const conditions: SQL[] = [];
     if (params.publicOnly) conditions.push(eq(products.status, 'ACTIVE'));
-    else if (params.status)
+    else if (params.status) {
+      // Comma-separated list, e.g. "DRAFT,ACTIVE,INACTIVE".
+      const statuses = params.status
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s): s is CommerceProduct['status'] =>
+          PRODUCT_STATUSES.has(s as CommerceProduct['status']),
+        );
       conditions.push(
-        eq(products.status, params.status as CommerceProduct['status']),
+        statuses.length ? inArray(products.status, statuses) : sql`false`,
       );
+    }
     if (params.categoryId)
       conditions.push(eq(products.categoryId, params.categoryId));
     if (params.brandId) conditions.push(eq(products.brandId, params.brandId));

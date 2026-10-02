@@ -33,7 +33,10 @@ export const adminKeys = {
   customers: (params: CustomerListParams) =>
     [...adminKeys.all, "customers", "list", params] as const,
   customer: (id: string) => [...adminKeys.all, "customers", id] as const,
-  inventory: () => [...adminKeys.all, "inventory"] as const,
+  inventory: (params: InventoryListParams) =>
+    [...adminKeys.all, "inventory", params] as const,
+  allProducts: (status: string) =>
+    [...adminKeys.all, "products", "all", status] as const,
   warehouses: () => [...adminKeys.all, "warehouses"] as const,
 };
 
@@ -56,6 +59,11 @@ export type ProductListParams = {
   pageSize: number;
   status?: string;
   q?: string;
+};
+export type InventoryListParams = {
+  page: number;
+  pageSize: number;
+  productId?: string;
 };
 export type CustomerListParams = { page: number; pageSize: number; q?: string };
 
@@ -200,11 +208,33 @@ export function useWarehouses<T>() {
   });
 }
 
-export function useAdminInventory() {
+export function useAdminInventory(params: InventoryListParams) {
   return useQuery({
-    queryKey: adminKeys.inventory(),
-    // The API caps pages at 100 rows.
-    queryFn: () =>
-      adminApi.listInventory(requireAccessToken(), { pageSize: 100 }),
+    queryKey: adminKeys.inventory(params),
+    queryFn: () => adminApi.listInventory(requireAccessToken(), params),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Every product with the given statuses, fetched 100 (the API maximum) at a time. */
+export function useAllAdminProducts(status: string) {
+  return useQuery({
+    queryKey: adminKeys.allProducts(status),
+    queryFn: async () => {
+      const token = requireAccessToken();
+      const pageSize = 100;
+      const first = await adminApi.listProducts(token, {
+        page: 1,
+        pageSize,
+        status,
+      });
+      const pages = Math.ceil((first.total ?? 0) / pageSize);
+      const rest = await Promise.all(
+        Array.from({ length: Math.max(0, pages - 1) }, (_, i) =>
+          adminApi.listProducts(token, { page: i + 2, pageSize, status }),
+        ),
+      );
+      return [first, ...rest].flatMap((result) => result.items ?? []);
+    },
   });
 }

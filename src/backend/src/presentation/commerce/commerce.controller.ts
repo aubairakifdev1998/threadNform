@@ -1645,12 +1645,16 @@ export class CommerceController {
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.INVENTORY_ADJUST)
   async listInventory(
-    @Query() query: PaginationQueryDto & { warehouseId?: string },
+    @Query()
+    query: PaginationQueryDto & { warehouseId?: string },
+    @Query('productId', new ParseUUIDPipe({ optional: true }))
+    productId?: string,
   ) {
     const page = normalizePagination(query.page, query.pageSize);
     const result = await this.inventory.listItems({
       ...page,
       warehouseId: query.warehouseId,
+      productId,
     });
     return paginated(result.items, result.total, page);
   }

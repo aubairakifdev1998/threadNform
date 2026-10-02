@@ -5,10 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
-import {
-  AdminListPagination,
-  paginateItems,
-} from "@/components/admin/admin-list-pagination";
+import { AdminListPagination } from "@/components/admin/admin-list-pagination";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,7 +32,7 @@ import {
   errorMessage,
   useAdminInventory,
   useAdminMutation,
-  useAdminProducts,
+  useAllAdminProducts,
   useErrorToast,
   useProductVariants,
   useWarehouses,
@@ -65,6 +62,7 @@ type VariantOption = {
   available: number;
 };
 
+const PAGE_SIZE = 10;
 const NO_PRODUCTS: ProductSummary[] = [];
 
 export function AdminInventoryPanel() {
@@ -82,12 +80,12 @@ export function AdminInventoryPanel() {
   );
 
   const warehouseQuery = useWarehouses<Warehouse>();
-  const inventoryQuery = useAdminInventory();
-  const productQuery = useAdminProducts({
-    page: 1,
-    pageSize: 100,
-    status: "DRAFT,ACTIVE,INACTIVE",
+  const inventoryQuery = useAdminInventory({
+    page,
+    pageSize: PAGE_SIZE,
+    productId: filterProductId === "all" ? undefined : filterProductId,
   });
+  const productQuery = useAllAdminProducts("DRAFT,ACTIVE,INACTIVE");
   const variantQuery = useProductVariants(productId);
   useErrorToast(
     warehouseQuery.error ?? inventoryQuery.error ?? productQuery.error,
@@ -101,15 +99,11 @@ export function AdminInventoryPanel() {
   // Default to the first warehouse until the admin picks one.
   const warehouseId = selectedWarehouseId || warehouses[0]?.id || "";
 
-  // Inventory is product→variant scoped; drop any row without a product link.
-  const rows: InventoryRow[] = useMemo(
-    () =>
-      (inventoryQuery.data?.items ?? []).filter(
-        (row) => typeof row.productId === "string" && row.productId.length > 0,
-      ),
-    [inventoryQuery.data],
-  );
-  const products: ProductSummary[] = productQuery.data?.items ?? NO_PRODUCTS;
+  // Archived products/variants and unlinked rows are excluded server-side.
+  const rows: InventoryRow[] = inventoryQuery.data?.items ?? [];
+  const total = inventoryQuery.data?.total ?? rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const products: ProductSummary[] = productQuery.data ?? NO_PRODUCTS;
 
   const variants: VariantOption[] = useMemo(
     () =>
@@ -152,17 +146,6 @@ export function AdminInventoryPanel() {
     }
   }
 
-  const productsWithStock = useMemo(() => {
-    const ids = new Set(rows.map((r) => r.productId).filter(Boolean));
-    return products.filter((p) => ids.has(p.id));
-  }, [products, rows]);
-
-  const filteredRows = useMemo(() => {
-    if (filterProductId === "all") return rows;
-    return rows.filter((row) => row.productId === filterProductId);
-  }, [rows, filterProductId]);
-
-  const paged = paginateItems(filteredRows, page, 10);
   const selectedVariant = variants.find((v) => v.id === variantId);
 
   return (
@@ -290,8 +273,8 @@ export function AdminInventoryPanel() {
               setPage(1);
             }}
           >
-            <option value="all">All products with stock</option>
-            {productsWithStock.map((p) => (
+            <option value="all">All products</option>
+            {products.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
@@ -316,7 +299,7 @@ export function AdminInventoryPanel() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paged.items.length === 0 ? (
+                {rows.length === 0 ? (
                   <TableRow>
                     <TableCell
                       colSpan={5}
@@ -327,7 +310,7 @@ export function AdminInventoryPanel() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paged.items.map((row) => (
+                  rows.map((row) => (
                     <TableRow key={`${row.warehouseId}-${row.variantId}`}>
                       <TableCell>
                         <p className="font-medium">
@@ -389,12 +372,12 @@ export function AdminInventoryPanel() {
         </Card>
       )}
 
-      {!loading && filteredRows.length > 0 ? (
+      {!loading && total > 0 ? (
         <AdminListPagination
-          page={paged.page}
-          totalPages={paged.totalPages}
-          total={paged.total}
-          pageSize={10}
+          page={Math.min(page, totalPages)}
+          totalPages={totalPages}
+          total={total}
+          pageSize={PAGE_SIZE}
           onPageChange={setPage}
         />
       ) : null}

@@ -78,6 +78,7 @@ export class SupabaseInventoryRepository implements InventoryRepository {
     page: number;
     pageSize: number;
     warehouseId?: string;
+    productId?: string;
     lowStockOnly?: boolean;
   }): Promise<{ items: InventoryItem[]; total: number }> {
     const filters: SQL[] = [
@@ -86,6 +87,9 @@ export class SupabaseInventoryRepository implements InventoryRepository {
     ];
     if (params.warehouseId) {
       filters.push(eq(inventoryItems.warehouseId, params.warehouseId));
+    }
+    if (params.productId) {
+      filters.push(eq(productVariants.productId, params.productId));
     }
     const where = and(...filters);
     const offset = (params.page - 1) * params.pageSize;

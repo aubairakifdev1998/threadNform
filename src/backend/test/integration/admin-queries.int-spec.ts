@@ -51,4 +51,36 @@ describe('Admin list filters & search', () => {
     expect((await ids('ARCHIVED')).map((i) => i.id)).toContain(p.productId);
     expect(await ids('NOT_A_STATUS')).toEqual([]);
   });
+
+  it('QRY admin/inventory filters by product and paginates server-side', async () => {
+    const a = await createProduct(h, owner, { stock: 3 });
+    await createProduct(h, owner, { stock: 4 });
+    const res = await h
+      .http()
+      .get(`${API}/admin/inventory`)
+      .query({ productId: a.productId })
+      .set(bearer(owner));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.data.total).toBe(1);
+    expect(res.body.data.items[0]).toMatchObject({
+      productId: a.productId,
+      variantId: a.variantId,
+      onHand: 3,
+    });
+
+    const paged = await h
+      .http()
+      .get(`${API}/admin/inventory`)
+      .query({ page: 2, pageSize: 1 })
+      .set(bearer(owner));
+    expect(paged.body.data.items).toHaveLength(1);
+    expect(paged.body.data.total).toBeGreaterThanOrEqual(2);
+
+    const bad = await h
+      .http()
+      .get(`${API}/admin/inventory`)
+      .query({ productId: 'not-a-uuid' })
+      .set(bearer(owner));
+    expect(bad.status).toBe(400);
+  });
 });

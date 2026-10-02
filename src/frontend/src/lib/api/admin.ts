@@ -485,7 +485,12 @@ export const adminApi = {
 
   listInventory(
     accessToken: string,
-    params?: { page?: number; pageSize?: number; warehouseId?: string },
+    params?: {
+      page?: number;
+      pageSize?: number;
+      warehouseId?: string;
+      productId?: string;
+    },
   ) {
     return apiRequest<{
       items: Array<{

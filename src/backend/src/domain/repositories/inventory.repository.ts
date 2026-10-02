@@ -52,6 +52,7 @@ export interface InventoryRepository {
     page: number;
     pageSize: number;
     warehouseId?: string;
+    productId?: string;
     lowStockOnly?: boolean;
   }): Promise<{ items: InventoryItem[]; total: number }>;
   adjust(input: {

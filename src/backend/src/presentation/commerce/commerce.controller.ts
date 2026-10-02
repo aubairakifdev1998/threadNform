@@ -2283,8 +2283,8 @@ export class CommerceController {
   @Delete('admin/categories/:id')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.CATALOG_WRITE)
-  async deleteCategory(@Param('id') id: string) {
-    await this.catalog.deleteCategory(id);
+  async deleteCategory(@Param('id', new ParseUUIDPipe()) id: string) {
+    await this.uow.run(() => this.catalog.deleteCategory(id));
     return { deleted: true };
   }
 
@@ -2313,8 +2313,8 @@ export class CommerceController {
   @Delete('admin/colors/:id')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.CATALOG_WRITE)
-  async deleteColor(@Param('id') id: string) {
-    await this.catalog.deleteColor(id);
+  async deleteColor(@Param('id', new ParseUUIDPipe()) id: string) {
+    await this.uow.run(() => this.catalog.deleteColor(id));
     return { deleted: true };
   }
 
@@ -2359,8 +2359,8 @@ export class CommerceController {
   @Delete('admin/sizes/:id')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.CATALOG_WRITE)
-  async deleteSize(@Param('id') id: string) {
-    await this.catalog.deleteSizeSystemValue(id);
+  async deleteSize(@Param('id', new ParseUUIDPipe()) id: string) {
+    await this.uow.run(() => this.catalog.deleteSizeSystemValue(id));
     return { deleted: true };
   }
 

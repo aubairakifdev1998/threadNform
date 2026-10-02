@@ -12,6 +12,8 @@ import {
   inArray,
   isNull,
   lte,
+  ne,
+  or,
   sql,
   type SQL,
 } from 'drizzle-orm';
@@ -31,6 +33,10 @@ import type {
   SizeSystem,
   SizeSystemValue,
 } from '../../../domain/repositories/catalog.repository.js';
+import {
+  ConflictException,
+  NotFoundException,
+} from '../../../domain/exceptions/domain.exception.js';
 import { DRIZZLE, type DrizzleDB } from '../../drizzle/drizzle.tokens.js';
 import { containsPattern } from '../../drizzle/like.js';
 import {
@@ -182,8 +188,58 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     return this.mapCategory(row);
   }
 
+  /**
+   * Deletes a category nothing live depends on. Subcategories and non-archived
+   * products block the delete with a 409 that says what to move first;
+   * archived products are simply unlinked.
+   */
   async deleteCategory(id: string): Promise<void> {
-    await this.db.delete(categories).where(eq(categories.id, id));
+    const children = await this.db
+      .select({ name: categories.name })
+      .from(categories)
+      .where(eq(categories.parentId, id))
+      .orderBy(asc(categories.name));
+    if (children.length) {
+      const names = children.map((c) => c.name);
+      throw new ConflictException(
+        `This category has ${names.length === 1 ? 'a subcategory' : `${names.length} subcategories`} (${names.join(', ')}). Move or delete ${names.length === 1 ? 'it' : 'them'} first.`,
+        'CATEGORY_HAS_SUBCATEGORIES',
+        { subcategories: names },
+      );
+    }
+
+    const inCategory = or(
+      eq(products.categoryId, id),
+      eq(products.subcategoryId, id),
+    );
+    const [inUse] = await this.db
+      .select({ value: count() })
+      .from(products)
+      .where(and(ne(products.status, 'ARCHIVED'), inCategory));
+    const productCount = Number(inUse?.value ?? 0);
+    if (productCount) {
+      throw new ConflictException(
+        `This category is used by ${productCount === 1 ? '1 product' : `${productCount} products`}. Move ${productCount === 1 ? 'it' : 'them'} to another category first.`,
+        'CATEGORY_IN_USE',
+        { productCount },
+      );
+    }
+
+    await this.db
+      .update(products)
+      .set({ categoryId: null })
+      .where(eq(products.categoryId, id));
+    await this.db
+      .update(products)
+      .set({ subcategoryId: null })
+      .where(eq(products.subcategoryId, id));
+    const deleted = await this.db
+      .delete(categories)
+      .where(eq(categories.id, id))
+      .returning({ id: categories.id });
+    if (!deleted.length) {
+      throw new NotFoundException('Category', id);
+    }
   }
 
   async listColors(): Promise<
@@ -256,7 +312,52 @@ export class SupabaseCatalogRepository implements CatalogRepository {
   }
 
   async deleteColor(id: string): Promise<void> {
-    await this.db.delete(colors).where(eq(colors.id, id));
+    await this.releaseVariantOption(
+      eq(productVariantOptions.colorId, id),
+      'colour',
+      'COLOR_IN_USE',
+    );
+    const deleted = await this.db
+      .delete(colors)
+      .where(eq(colors.id, id))
+      .returning({ id: colors.id });
+    if (!deleted.length) throw new NotFoundException('Colour', id);
+  }
+
+  /**
+   * Live variants using a colour/size block its delete with a 409; option
+   * rows on archived variants or products are removed so the delete can go
+   * through.
+   */
+  private async releaseVariantOption(
+    usesOption: SQL,
+    label: string,
+    code: string,
+  ): Promise<void> {
+    const [inUse] = await this.db
+      .select({ value: sql<number>`count(distinct ${productVariants.productId})::int` })
+      .from(productVariantOptions)
+      .innerJoin(
+        productVariants,
+        eq(productVariants.id, productVariantOptions.variantId),
+      )
+      .innerJoin(products, eq(products.id, productVariants.productId))
+      .where(
+        and(
+          usesOption,
+          ne(productVariants.status, 'ARCHIVED'),
+          ne(products.status, 'ARCHIVED'),
+        ),
+      );
+    const productCount = Number(inUse?.value ?? 0);
+    if (productCount) {
+      throw new ConflictException(
+        `This ${label} is used by ${productCount === 1 ? '1 product' : `${productCount} products`}. Remove it from ${productCount === 1 ? 'that product' : 'those products'} first.`,
+        code,
+        { productCount },
+      );
+    }
+    await this.db.delete(productVariantOptions).where(usesOption);
   }
 
   async listBrands(): Promise<Brand[]> {
@@ -1265,7 +1366,16 @@ export class SupabaseCatalogRepository implements CatalogRepository {
   }
 
   async deleteSizeSystemValue(id: string): Promise<void> {
-    await this.db.delete(sizeSystemValues).where(eq(sizeSystemValues.id, id));
+    await this.releaseVariantOption(
+      eq(productVariantOptions.sizeValueId, id),
+      'size',
+      'SIZE_IN_USE',
+    );
+    const deleted = await this.db
+      .delete(sizeSystemValues)
+      .where(eq(sizeSystemValues.id, id))
+      .returning({ id: sizeSystemValues.id });
+    if (!deleted.length) throw new NotFoundException('Size', id);
   }
 
   async createSizeChart(input: {

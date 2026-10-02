@@ -83,4 +83,160 @@ describe('Admin list filters & search', () => {
       .set(bearer(owner));
     expect(bad.status).toBe(400);
   });
+
+  describe('category delete', () => {
+    async function category(parentId: string | null = null) {
+      const t = Math.random().toString(36).slice(2, 8);
+      const dept = await h.db.query(
+        `insert into public.departments (name, slug) values ($1, $1) returning id`,
+        [`dept-${t}`],
+      );
+      const cat = await h.db.query(
+        `insert into public.categories (department_id, parent_id, name, slug)
+         values ($1, $2, $3, $3) returning id`,
+        [dept.rows[0].id, parentId, `cat-${t}`],
+      );
+      return cat.rows[0].id as string;
+    }
+    const del = (id: string) =>
+      h.http().delete(`${API}/admin/categories/${id}`).set(bearer(owner));
+    const exists = async (id: string) =>
+      (await h.db.query('select 1 from public.categories where id = $1', [id]))
+        .rowCount === 1;
+
+    it('CAT deletes an unused category', async () => {
+      const id = await category();
+      const res = await del(id);
+      expect(res.status, res.text).toBe(200);
+      expect(await exists(id)).toBe(false);
+    });
+
+    it('CAT refuses while subcategories exist, naming them', async () => {
+      const parent = await category();
+      const child = await category(parent);
+      const { rows } = await h.db.query(
+        'select name from public.categories where id = $1',
+        [child],
+      );
+      const res = await del(parent);
+      expect(res.status, res.text).toBe(409);
+      expect(res.body.error.code).toBe('CATEGORY_HAS_SUBCATEGORIES');
+      expect(res.body.error.message).toContain(rows[0].name);
+      expect(await exists(parent)).toBe(true);
+    });
+
+    it('CAT refuses while live products use it (category or subcategory)', async () => {
+      for (const column of ['category_id', 'subcategory_id']) {
+        const id = await category();
+        const p = await createProduct(h, owner);
+        await h.db.query(
+          `update public.products set ${column} = $1 where id = $2`,
+          [id, p.productId],
+        );
+        const res = await del(id);
+        expect(res.status, res.text).toBe(409);
+        expect(res.body.error.code).toBe('CATEGORY_IN_USE');
+        expect(await exists(id)).toBe(true);
+      }
+    });
+
+    it('CAT unlinks archived products and deletes', async () => {
+      const id = await category();
+      const p = await createProduct(h, owner);
+      await h.db.query(
+        `update public.products set category_id = $1, subcategory_id = $1, status = 'ARCHIVED' where id = $2`,
+        [id, p.productId],
+      );
+      const res = await del(id);
+      expect(res.status, res.text).toBe(200);
+      expect(await exists(id)).toBe(false);
+      const { rows } = await h.db.query(
+        'select category_id, subcategory_id from public.products where id = $1',
+        [p.productId],
+      );
+      expect(rows[0]).toEqual({ category_id: null, subcategory_id: null });
+    });
+
+    it('CAT unknown id → 404, malformed id → 400', async () => {
+      expect((await del('00000000-0000-4000-8000-000000000000')).status).toBe(404);
+      expect((await del('not-a-uuid')).status).toBe(400);
+    });
+  });
+
+  describe('colour & size delete', () => {
+    const t = () => Math.random().toString(36).slice(2, 8);
+    async function colour() {
+      const n = `col-${t()}`;
+      const r = await h.db.query(
+        `insert into public.colors (name, name_normalized) values ($1, $1) returning id`,
+        [n],
+      );
+      return r.rows[0].id as string;
+    }
+    async function size() {
+      const sys = await h.db.query(
+        `insert into public.size_systems (code, name) values ($1, 'QA') returning id`,
+        [`SYS_${t()}`],
+      );
+      const r = await h.db.query(
+        `insert into public.size_system_values (size_system_id, code, label) values ($1, 'M', 'M') returning id`,
+        [sys.rows[0].id],
+      );
+      return r.rows[0].id as string;
+    }
+    async function attach(column: 'color_id' | 'size_value_id', id: string) {
+      const p = await createProduct(h, owner);
+      const attr = await h.db.query(
+        `insert into public.attributes (code, name) values ($1, 'Opt') returning id`,
+        [`A_${t()}`],
+      );
+      await h.db.query(
+        `insert into public.product_variant_options (variant_id, attribute_id, ${column}) values ($1, $2, $3)`,
+        [p.variantId, attr.rows[0].id, id],
+      );
+      return p;
+    }
+
+    for (const [label, path, column, make, table, code] of [
+      ['colour', 'colors', 'color_id', colour, 'colors', 'COLOR_IN_USE'],
+      ['size', 'sizes', 'size_value_id', size, 'size_system_values', 'SIZE_IN_USE'],
+    ] as const) {
+      const del = (id: string) =>
+        h.http().delete(`${API}/admin/${path}/${id}`).set(bearer(owner));
+      const exists = async (id: string) =>
+        (await h.db.query(`select 1 from public.${table} where id = $1`, [id]))
+          .rowCount === 1;
+
+      it(`OPT ${label}: unused → deleted`, async () => {
+        const id = await make();
+        expect((await del(id)).status).toBe(200);
+        expect(await exists(id)).toBe(false);
+      });
+
+      it(`OPT ${label}: used by a live product → 409`, async () => {
+        const id = await make();
+        await attach(column, id);
+        const res = await del(id);
+        expect(res.status, res.text).toBe(409);
+        expect(res.body.error.code).toBe(code);
+        expect(await exists(id)).toBe(true);
+      });
+
+      it(`OPT ${label}: only archived products → deleted`, async () => {
+        const id = await make();
+        const p = await attach(column, id);
+        await h.db.query(
+          `update public.products set status = 'ARCHIVED' where id = $1`,
+          [p.productId],
+        );
+        expect((await del(id)).status).toBe(200);
+        expect(await exists(id)).toBe(false);
+      });
+
+      it(`OPT ${label}: unknown → 404, malformed → 400`, async () => {
+        expect((await del('00000000-0000-4000-8000-000000000000')).status).toBe(404);
+        expect((await del('nope')).status).toBe(400);
+      });
+    }
+  });
 });

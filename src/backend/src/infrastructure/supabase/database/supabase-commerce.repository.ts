@@ -39,6 +39,7 @@ import {
   normalizePaymentExtra,
 } from '../../../domain/shared/commerce-field-map.js';
 import { DRIZZLE, type DrizzleDB } from '../../drizzle/drizzle.tokens.js';
+import { containsPattern } from '../../drizzle/like.js';
 import {
   auditLogs,
   inventoryItems,
@@ -426,7 +427,7 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       );
     }
     if (params.q) {
-      const pattern = `%${params.q}%`;
+      const pattern = containsPattern(params.q);
       filters.push(
         or(
           ilike(orders.orderNumber, pattern),
@@ -714,7 +715,7 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     }
 
     if (params.q?.trim()) {
-      const pattern = `%${params.q.trim()}%`;
+      const pattern = containsPattern(params.q.trim());
       filters.push(
         or(
           ilike(orders.orderNumber, pattern),

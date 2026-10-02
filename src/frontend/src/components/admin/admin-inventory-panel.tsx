@@ -286,7 +286,13 @@ export function AdminInventoryPanel() {
       {loading ? (
         <ListBlockShimmer />
       ) : (
-        <Card>
+        <Card
+          aria-busy={inventoryQuery.isPlaceholderData}
+          className={cn(
+            "transition-opacity",
+            inventoryQuery.isPlaceholderData && "opacity-60",
+          )}
+        >
           <CardContent className="p-0">
             <Table>
               <TableHeader>

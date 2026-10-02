@@ -468,7 +468,13 @@ export function AdminPaymentsPanel() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-4">
+          <div
+            aria-busy={queue.isPlaceholderData}
+            className={cn(
+              "grid gap-4 transition-opacity",
+              queue.isPlaceholderData && "opacity-60",
+            )}
+          >
             {items.map((item) => {
               const canReview = REVIEWABLE.has(item.status);
               return (

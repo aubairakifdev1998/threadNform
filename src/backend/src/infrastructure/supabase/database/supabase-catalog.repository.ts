@@ -32,6 +32,7 @@ import type {
   SizeSystemValue,
 } from '../../../domain/repositories/catalog.repository.js';
 import { DRIZZLE, type DrizzleDB } from '../../drizzle/drizzle.tokens.js';
+import { containsPattern } from '../../drizzle/like.js';
 import {
   attributes,
   attributeOptions,
@@ -341,7 +342,7 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     if (params.brandId) conditions.push(eq(products.brandId, params.brandId));
     if (params.departmentId)
       conditions.push(eq(products.departmentId, params.departmentId));
-    if (params.q) conditions.push(ilike(products.name, `%${params.q}%`));
+    if (params.q) conditions.push(ilike(products.name, containsPattern(params.q)));
 
     if (params.collectionId) {
       conditions.push(
@@ -620,7 +621,10 @@ export class SupabaseCatalogRepository implements CatalogRepository {
           minPence: sql<string | null>`min(coalesce(${productPrices.salePricePence}, ${productPrices.basePricePence}))`,
           maxPence: sql<string | null>`max(coalesce(${productPrices.salePricePence}, ${productPrices.basePricePence}))`,
         })
-        .from(productPrices),
+        .from(productPrices)
+        // Draft/archived prices must not leak into the public price slider.
+        .innerJoin(products, eq(products.id, productPrices.productId))
+        .where(eq(products.status, 'ACTIVE')),
     ]);
 
     const clothingSystem =

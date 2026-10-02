@@ -174,6 +174,12 @@ describe('List & aggregate query results', () => {
       expect((await search(archivedSlug, { inStock: 'true' })).total).toBe(0);
     });
 
+    it('FLT search treats % and _ literally', async () => {
+      expect((await search('%', {})).total).toBe(0);
+      expect((await search('QA_Product', {})).total).toBe(0);
+      expect((await search(slug, {})).total).toBe(1);
+    });
+
     it('FLT inactive products never appear on the storefront', async () => {
       const p = await createProduct(h, owner);
       const s = await slugOf(p.productId);
@@ -293,6 +299,16 @@ describe('List & aggregate query results', () => {
       expect(typeof res.body.data.ordersToday).toBe('number');
     });
 
+    it('AGG storefront price range ignores draft products', async () => {
+      const draft = await createProduct(h, owner, { pricePence: 999_999 });
+      await h.db.query(
+        `update public.products set status = 'DRAFT' where id = $1`,
+        [draft.productId],
+      );
+      const res = await h.http().get(`${API}/catalog/filters`);
+      expect(res.body.data.priceRange.maxPence).toBeLessThan(999_999);
+    });
+
     it('AGG storefront filters: price range and attribute options', async () => {
       const t = tag();
       const attr = await h.db.query(
@@ -309,9 +325,11 @@ describe('List & aggregate query results', () => {
       expect(res.status, JSON.stringify(res.body)).toBe(200);
 
       const { rows } = await h.db.query(
-        `select min(coalesce(sale_price_pence, base_price_pence))::bigint as min,
-                max(coalesce(sale_price_pence, base_price_pence))::bigint as max
-           from public.product_prices`,
+        `select min(coalesce(pp.sale_price_pence, pp.base_price_pence))::bigint as min,
+                max(coalesce(pp.sale_price_pence, pp.base_price_pence))::bigint as max
+           from public.product_prices pp
+           join public.products p on p.id = pp.product_id
+          where p.status = 'ACTIVE'`,
       );
       expect(res.body.data.priceRange).toEqual({
         minPence: Number(rows[0].min),

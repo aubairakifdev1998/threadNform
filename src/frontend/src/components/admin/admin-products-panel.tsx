@@ -97,7 +97,13 @@ export function AdminProductsPanel() {
       {products.isPending ? (
         <AdminTableShimmer />
       ) : (
-        <Card>
+        <Card
+          aria-busy={products.isPlaceholderData}
+          className={cn(
+            "transition-opacity",
+            products.isPlaceholderData && "opacity-60",
+          )}
+        >
           <CardContent className="p-0">
             <Table>
               <TableHeader>

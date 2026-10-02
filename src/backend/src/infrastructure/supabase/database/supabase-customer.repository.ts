@@ -5,6 +5,7 @@ import type {
   CustomerRepository,
 } from '../../../domain/repositories/customer.repository.js';
 import { DRIZZLE, type DrizzleDB } from '../../drizzle/drizzle.tokens.js';
+import { containsPattern } from '../../drizzle/like.js';
 import { customers } from '../../drizzle/schema/index.js';
 
 @Injectable()
@@ -86,7 +87,7 @@ export class SupabaseCustomerRepository implements CustomerRepository {
   }): Promise<{ items: Customer[]; total: number }> {
     const filters: SQL[] = [];
     if (params.q) {
-      const pattern = `%${params.q}%`;
+      const pattern = containsPattern(params.q);
       filters.push(
         or(
           ilike(customers.email, pattern),

@@ -31,6 +31,7 @@ import {
   type CustomerRow,
 } from "@/lib/query/admin";
 import { formatGbp } from "@/lib/money";
+import { cn } from "@/lib/utils";
 import { ListBlockShimmer } from "@/components/ui/page-shimmers";
 
 type CustomerDetail = CustomerRow & {
@@ -113,7 +114,13 @@ export function AdminCustomersPanel() {
         {customers.isPending ? (
           <ListBlockShimmer />
         ) : (
-          <Card>
+          <Card
+            aria-busy={customers.isPlaceholderData}
+            className={cn(
+              "transition-opacity",
+              customers.isPlaceholderData && "opacity-60",
+            )}
+          >
             <CardContent className="p-0">
               <Table>
                 <TableHeader>

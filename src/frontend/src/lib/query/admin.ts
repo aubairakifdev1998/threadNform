@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { adminApi } from "@/lib/api";
 import { ApiError } from "@/lib/api/client";
 import { tokenStore } from "@/lib/auth/session";
+import type { ProductSummary } from "@/types/api";
 
 /**
  * Query keys for admin data. Everything lives under ["admin"] so a mutation
@@ -223,18 +224,20 @@ export function useAllAdminProducts(status: string) {
     queryFn: async () => {
       const token = requireAccessToken();
       const pageSize = 100;
-      const first = await adminApi.listProducts(token, {
-        page: 1,
-        pageSize,
-        status,
-      });
-      const pages = Math.ceil((first.total ?? 0) / pageSize);
-      const rest = await Promise.all(
-        Array.from({ length: Math.max(0, pages - 1) }, (_, i) =>
-          adminApi.listProducts(token, { page: i + 2, pageSize, status }),
-        ),
-      );
-      return [first, ...rest].flatMap((result) => result.items ?? []);
+      const items: ProductSummary[] = [];
+      // Sequential so a large catalogue never fans out into a request burst.
+      for (let page = 1; ; page += 1) {
+        const result = await adminApi.listProducts(token, {
+          page,
+          pageSize,
+          status,
+        });
+        const batch = result.items ?? [];
+        items.push(...batch);
+        if (batch.length < pageSize || items.length >= (result.total ?? 0)) {
+          return items;
+        }
+      }
     },
   });
 }

@@ -24,9 +24,14 @@ const DRIZZLE_UNIT_OF_WORK = Symbol('DRIZZLE_UNIT_OF_WORK');
         if (!connectionString) {
           throw new Error('Missing DATABASE_URL — required for Drizzle ORM');
         }
+        // Serverless instances are many and short-lived: keep each pool tiny
+        // and release idle connections fast, or warm instances exhaust the
+        // Supabase pooler's client limit (15 in session mode).
+        const serverless = Boolean(process.env.VERCEL);
         const pool = new Pool({
           connectionString,
-          max: 10,
+          max: Number(process.env.DATABASE_POOL_MAX) || (serverless ? 2 : 10),
+          idleTimeoutMillis: serverless ? 5_000 : 30_000,
           ssl: connectionString.includes('supabase')
             ? { rejectUnauthorized: false }
             : undefined,

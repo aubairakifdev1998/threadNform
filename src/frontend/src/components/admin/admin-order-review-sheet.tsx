@@ -21,6 +21,12 @@ import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/page-shimmers";
 import { AdminOrderFulfilment } from "@/components/admin/admin-order-fulfilment";
+import { OrderTimeline } from "@/components/orders/order-timeline";
+import {
+  OrderStatusPill,
+  PaymentStatusPill,
+} from "@/components/orders/status-pill";
+import { formatDate } from "@/lib/orders/presentation";
 
 type AdminOrderDetail = Awaited<ReturnType<typeof adminApi.getOrder>>;
 
@@ -42,39 +48,52 @@ export function AdminOrderReviewSheet({
   onOpenChange: (open: boolean) => void;
   onChanged?: () => void;
 }) {
-  const [order, setOrder] = useState<AdminOrderDetail | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Detail is cached per order id; what is shown is derived from it, so
+  // opening another order never flashes the previous one.
+  const [loaded, setLoaded] = useState<{
+    id: string;
+    detail: AdminOrderDetail | null;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const order =
+    open && orderId && loaded?.id === orderId ? loaded.detail : null;
+  const loading = Boolean(open && orderId && loaded?.id !== orderId);
 
-  async function load(id: string) {
+  async function fetchDetail(id: string) {
     const token = tokenStore.getAccessToken();
-    if (!token) return;
-    setLoading(true);
+    if (!token) return null;
     try {
-      const detail = await adminApi.getOrder(token, id);
-      setOrder(detail);
+      return await adminApi.getOrder(token, id);
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Failed to load order",
       );
-      setOrder(null);
-    } finally {
-      setLoading(false);
+      return null;
     }
   }
 
+  /** Refresh after an action. */
+  async function load(id: string) {
+    setLoaded({ id, detail: await fetchDetail(id) });
+  }
+
   useEffect(() => {
-    if (open && orderId) {
-      void load(orderId);
+    if (!open || !orderId) return;
+    let cancelled = false;
+    void fetchDetail(orderId).then((detail) => {
+      if (cancelled) return;
+      setLoaded({ id: orderId, detail });
       setRejectReason("");
-    } else {
-      setOrder(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open, orderId]);
 
   const payment = order?.payment;
+  const amountDue =
+    payment?.amountDuePence ?? order?.grandTotalPence ?? order?.totalPence ?? 0;
   const proofs = payment?.proofs ?? [];
   const canReviewPayment =
     Boolean(payment) &&
@@ -137,13 +156,14 @@ export function AdminOrderReviewSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-lg"
+        className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-2xl"
       >
         <SheetHeader className="border-b border-border pb-4">
           <SheetTitle>{order?.orderNumber ?? "Order review"}</SheetTitle>
           <SheetDescription>
-            Check payment evidence before confirming. Approval verifies the
-            transfer and moves the order to CONFIRMED.
+            {order
+              ? `Placed ${formatDate(order.placedAt, true)} · ${order.items?.length ?? 0} item line(s)`
+              : "Loading…"}
           </SheetDescription>
         </SheetHeader>
 
@@ -155,41 +175,117 @@ export function AdminOrderReviewSheet({
           ) : (
             <>
               <div className="flex flex-wrap gap-2">
-                <Badge variant="secondary">{order.status}</Badge>
-                <Badge variant="outline">
-                  Payment {order.paymentStatus ?? payment?.status ?? "—"}
-                </Badge>
-                {order.shippingStatus ? (
-                  <Badge variant="outline">
-                    Shipping {order.shippingStatus}
-                  </Badge>
-                ) : null}
+                <OrderStatusPill status={order.status} />
+                <PaymentStatusPill
+                  status={payment?.status ?? order.paymentStatus}
+                />
               </div>
 
-              <div className="space-y-1 text-sm">
-                <p>
-                  <span className="text-muted-foreground">Customer</span>{" "}
-                  {order.email}
-                </p>
-                <p>
-                  <span className="text-muted-foreground">Total</span>{" "}
-                  <span className="font-medium tabular-nums">
-                    {formatGbp(
-                      payment?.amountDuePence ??
-                        order.grandTotalPence ??
-                        order.totalPence ??
-                        0,
-                    )}
-                  </span>
-                </p>
-                {payment?.amountClaimedPence != null ? (
-                  <p>
-                    <span className="text-muted-foreground">Claimed</span>{" "}
-                    <span className="tabular-nums">
-                      {formatGbp(payment.amountClaimedPence)}
-                    </span>
-                  </p>
-                ) : null}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-border p-4 text-sm">
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    Customer
+                  </h3>
+                  <a
+                    href={`mailto:${order.email}`}
+                    className="block truncate font-medium underline-offset-4 hover:underline"
+                  >
+                    {order.email}
+                  </a>
+                  {order.phone ? (
+                    <a
+                      href={`tel:${order.phone}`}
+                      className="block text-muted-foreground"
+                    >
+                      {order.phone}
+                    </a>
+                  ) : null}
+                  {order.shippingAddress ? (
+                    <address className="mt-3 not-italic leading-relaxed text-muted-foreground">
+                      {order.shippingAddress.fullName}
+                      <br />
+                      {order.shippingAddress.line1}
+                      {order.shippingAddress.line2
+                        ? `, ${order.shippingAddress.line2}`
+                        : ""}
+                      <br />
+                      {order.shippingAddress.city}{" "}
+                      {order.shippingAddress.postcode}
+                    </address>
+                  ) : null}
+                  {order.shippingMethodSnapshot?.name ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {order.shippingMethodSnapshot.name}
+                    </p>
+                  ) : null}
+                  {order.customerNote ? (
+                    <p className="mt-3 rounded-md bg-secondary px-3 py-2 text-xs">
+                      “{order.customerNote}”
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="rounded-lg border border-border p-4 text-sm">
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    Amounts
+                  </h3>
+                  <dl className="space-y-1">
+                    {order.subtotalPence != null ? (
+                      <div className="flex justify-between">
+                        <dt className="text-muted-foreground">Items</dt>
+                        <dd className="tabular-nums">
+                          {formatGbp(order.subtotalPence)}
+                        </dd>
+                      </div>
+                    ) : null}
+                    {order.shippingPence != null ? (
+                      <div className="flex justify-between">
+                        <dt className="text-muted-foreground">Delivery</dt>
+                        <dd className="tabular-nums">
+                          {formatGbp(order.shippingPence)}
+                        </dd>
+                      </div>
+                    ) : null}
+                    <div className="flex justify-between font-semibold">
+                      <dt>Total due</dt>
+                      <dd className="tabular-nums">{formatGbp(amountDue)}</dd>
+                    </div>
+                    {payment?.amountClaimedPence != null ? (
+                      <div
+                        className={cn(
+                          "flex justify-between",
+                          payment.amountClaimedPence !== amountDue &&
+                            "font-medium text-destructive",
+                        )}
+                      >
+                        <dt>Customer says paid</dt>
+                        <dd className="tabular-nums">
+                          {formatGbp(payment.amountClaimedPence)}
+                        </dd>
+                      </div>
+                    ) : null}
+                    {order.refundedPence ? (
+                      <div className="flex justify-between text-success">
+                        <dt>Refunded</dt>
+                        <dd className="tabular-nums">
+                          −{formatGbp(order.refundedPence)}
+                        </dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                  {order.vatPence != null ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Incl. VAT {formatGbp(order.vatPence)}
+                    </p>
+                  ) : null}
+                  {payment?.amountClaimedPence != null &&
+                  payment.amountClaimedPence !== amountDue ? (
+                    <p className="mt-2 text-xs text-destructive">
+                      Claimed amount differs from the total — check the bank
+                      statement before approving.
+                    </p>
+                  ) : null}
+                </div>
               </div>
 
               {paymentVerified && order.items?.length ? (
@@ -315,6 +411,12 @@ export function AdminOrderReviewSheet({
                   </div>
                 )}
               </div>
+              {order.timeline?.length ? (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-medium">Activity</h3>
+                  <OrderTimeline entries={order.timeline} showVisibility />
+                </div>
+              ) : null}
             </>
           )}
         </div>

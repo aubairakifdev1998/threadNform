@@ -1079,15 +1079,20 @@ export class CommerceController {
           await this.commerce.listPaymentProofs(payment.id),
         )
       : [];
-    const [shipments, refunds] = await Promise.all([
+    const [shipments, refunds, timeline, addresses] = await Promise.all([
       this.commerce.listShipments(order.id),
       this.commerce.listRefunds(order.id),
+      this.commerce.listOrderTimeline(order.id, { customerOnly: true }),
+      this.commerce.listOrderAddresses(order.id),
     ]);
     return {
       ...order,
       items,
       shipments,
       refunds,
+      timeline,
+      shippingAddress: addresses.find((a) => a.type === 'SHIPPING') ?? null,
+      billingAddress: addresses.find((a) => a.type === 'BILLING') ?? null,
       payment: payment
         ? {
             id: payment.id,
@@ -1738,15 +1743,20 @@ export class CommerceController {
           await this.commerce.listPaymentProofs(payment.id),
         )
       : [];
-    const [shipments, refunds] = await Promise.all([
+    const [shipments, refunds, timeline, addresses] = await Promise.all([
       this.commerce.listShipments(order.id),
       this.commerce.listRefunds(order.id),
+      this.commerce.listOrderTimeline(order.id),
+      this.commerce.listOrderAddresses(order.id),
     ]);
     return {
       ...order,
       items,
       shipments,
       refunds,
+      timeline,
+      shippingAddress: addresses.find((a) => a.type === 'SHIPPING') ?? null,
+      billingAddress: addresses.find((a) => a.type === 'BILLING') ?? null,
       payment: payment
         ? {
             id: payment.id,

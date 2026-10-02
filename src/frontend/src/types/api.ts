@@ -236,7 +236,11 @@ export type OrderSummary = {
   trackingUrl?: string | null;
   totalPence: number;
   grandTotalPence?: number;
-  createdAt: string;
+  refundedPence?: number;
+  /** API field; `createdAt` kept for older callers. */
+  placedAt?: string;
+  createdAt?: string;
+  email?: string;
 };
 
 export type CustomerProfile = {

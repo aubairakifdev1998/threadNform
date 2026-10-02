@@ -25,7 +25,9 @@ import type {
   CommerceRepository,
   CreateOrderInput,
   Order,
+  OrderAddressRecord,
   OrderItem,
+  OrderTimelineEntry,
   Payment,
   PaymentProof,
   Refund,
@@ -411,7 +413,12 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       filters.push(eq(orders.email, params.email.trim().toLowerCase()));
     }
     if (params.status) {
-      filters.push(eq(orders.status, params.status as OrderStatus));
+      // Comma-separated list, e.g. "CONFIRMED,PROCESSING,PACKED".
+      const statuses = params.status
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean) as OrderStatus[];
+      filters.push(inArray(orders.status, statuses));
     }
     if (params.paymentStatus) {
       filters.push(
@@ -446,6 +453,51 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       items: items.map((row) => this.mapOrder(row)),
       total: totalRow?.value ?? 0,
     };
+  }
+
+  async listOrderTimeline(
+    orderId: string,
+    options: { customerOnly?: boolean } = {},
+  ): Promise<OrderTimelineEntry[]> {
+    const rows = await this.db
+      .select()
+      .from(orderStatusHistory)
+      .where(
+        options.customerOnly
+          ? and(
+              eq(orderStatusHistory.orderId, orderId),
+              eq(orderStatusHistory.visibility, 'CUSTOMER'),
+            )
+          : eq(orderStatusHistory.orderId, orderId),
+      )
+      .orderBy(asc(orderStatusHistory.createdAt));
+    return rows.map((row) => ({
+      id: row.id,
+      fromStatus: row.fromStatus ?? null,
+      toStatus: row.toStatus,
+      actorType: row.actorType,
+      note: row.note ?? null,
+      visibility: row.visibility,
+      createdAt: row.createdAt,
+    }));
+  }
+
+  async listOrderAddresses(orderId: string): Promise<OrderAddressRecord[]> {
+    const rows = await this.db
+      .select()
+      .from(orderAddresses)
+      .where(eq(orderAddresses.orderId, orderId));
+    return rows.map((row) => ({
+      type: row.type,
+      fullName: row.fullName,
+      line1: row.line1,
+      line2: row.line2 ?? null,
+      city: row.city,
+      county: row.county ?? null,
+      postcode: row.postcode,
+      country: row.country,
+      phone: row.phone ?? null,
+    }));
   }
 
   async listOrderItems(orderId: string): Promise<OrderItem[]> {

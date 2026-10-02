@@ -98,6 +98,28 @@ export type Refund = {
   }>;
 };
 
+export type OrderTimelineEntry = {
+  id: string;
+  fromStatus: string | null;
+  toStatus: string;
+  actorType: string;
+  note: string | null;
+  visibility: string;
+  createdAt: Date;
+};
+
+export type OrderAddressRecord = {
+  type: 'SHIPPING' | 'BILLING';
+  fullName: string;
+  line1: string;
+  line2: string | null;
+  city: string;
+  county: string | null;
+  postcode: string;
+  country: string;
+  phone: string | null;
+};
+
 export type Payment = {
   id: string;
   orderId: string;
@@ -206,6 +228,12 @@ export interface CommerceRepository {
     q?: string;
   }): Promise<{ items: Order[]; total: number }>;
   listOrderItems(orderId: string): Promise<OrderItem[]>;
+  /** Status history, oldest first; `customerOnly` hides internal/admin notes. */
+  listOrderTimeline(
+    orderId: string,
+    options?: { customerOnly?: boolean },
+  ): Promise<OrderTimelineEntry[]>;
+  listOrderAddresses(orderId: string): Promise<OrderAddressRecord[]>;
   updateOrderStatus(input: {
     orderId: string;
     fromStatus: OrderStatus;

@@ -203,16 +203,24 @@ export const adminApi = {
 
   listOrders(
     accessToken: string,
-    params?: { page?: number; pageSize?: number; status?: string },
+    params?: {
+      page?: number;
+      pageSize?: number;
+      /** One status or a comma-separated list. */
+      status?: string;
+      paymentStatus?: string;
+      q?: string;
+    },
   ) {
-    return apiRequest<{ items: OrderSummary[]; total?: number }>(
-      "/admin/orders",
-      {
-        accessToken,
-        searchParams: params,
-        cache: "no-store",
-      },
-    );
+    return apiRequest<{
+      items: OrderSummary[];
+      total?: number;
+      totalPages?: number;
+    }>("/admin/orders", {
+      accessToken,
+      searchParams: params,
+      cache: "no-store",
+    });
   },
 
   getOrder(accessToken: string, id: string) {
@@ -230,6 +238,29 @@ export const adminApi = {
       trackingNumber?: string | null;
       trackingUrl?: string | null;
       refundedPence?: number;
+      placedAt?: string;
+      subtotalPence?: number;
+      shippingPence?: number;
+      vatPence?: number;
+      customerNote?: string | null;
+      shippingMethodSnapshot?: { name?: string };
+      shippingAddress?: {
+        fullName: string;
+        line1: string;
+        line2: string | null;
+        city: string;
+        county: string | null;
+        postcode: string;
+        phone: string | null;
+      } | null;
+      timeline?: Array<{
+        id: string;
+        toStatus: string;
+        note: string | null;
+        actorType: string;
+        visibility: string;
+        createdAt: string;
+      }>;
       items: Array<{
         id: string;
         productName: string;

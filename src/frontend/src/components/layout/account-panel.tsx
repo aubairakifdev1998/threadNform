@@ -13,6 +13,11 @@ import { addressesApi, authApi, customersApi, ordersApi } from "@/lib/api";
 import { ApiError } from "@/lib/api/client";
 import { fetchCurrentUser } from "@/lib/auth/current-user";
 import { tokenStore } from "@/lib/auth/session";
+import {
+  OrderStatusPill,
+  PaymentStatusPill,
+} from "@/components/orders/status-pill";
+import { customerNextStep, formatDate } from "@/lib/orders/presentation";
 import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { AccountShimmer } from "@/components/ui/page-shimmers";
@@ -52,25 +57,21 @@ export function AccountPanel() {
   const [savingAddress, setSavingAddress] = useState(false);
 
   const load = useCallback(async () => {
-    const token = tokenStore.getAccessToken();
-    if (!token) {
-      setUser(null);
-      setProfile(null);
-      setOrders([]);
-      setAddresses([]);
-      setLoading(false);
-      return;
-    }
-
+    const hadSession = Boolean(tokenStore.getAccessToken());
     try {
+      // Resolves to null when signed out, so every state update below
+      // happens after an await (no synchronous setState in the effect).
       const me = await fetchCurrentUser();
-      if (!me) {
+      const fresh = tokenStore.getAccessToken();
+      if (!me || !fresh) {
         setUser(null);
-        toast.error("Session expired — please sign in again");
+        setProfile(null);
+        setOrders([]);
+        setAddresses([]);
+        if (hadSession) toast.error("Session expired — please sign in again");
         return;
       }
       setUser(me);
-      const fresh = tokenStore.getAccessToken() ?? token;
 
       const [profileResult, ordersResult, addressesResult] =
         await Promise.allSettled([
@@ -111,7 +112,9 @@ export function AccountPanel() {
   }, []);
 
   useEffect(() => {
-    void load();
+    // Run after mount in a callback so updates never happen synchronously
+    // inside the effect body.
+    void Promise.resolve().then(load);
   }, [load]);
 
   async function signOut() {
@@ -277,7 +280,9 @@ export function AccountPanel() {
               {profile?.fullName || user.fullName || user.email}
             </span>
           </p>
-          <p className="mt-1 text-sm text-muted-foreground">{user.email}</p>
+          {profile?.fullName || user.fullName ? (
+            <p className="mt-1 text-sm text-muted-foreground">{user.email}</p>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
           {isAdmin ? (
@@ -297,6 +302,86 @@ export function AccountPanel() {
           </Button>
         </div>
       </div>
+
+      <section className="space-y-4">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="font-display text-xl font-semibold">
+              Orders & tracking
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Open an order for payment status, delivery progress, and tracking.
+            </p>
+          </div>
+          <Link
+            href="/shop"
+            className="text-sm text-muted-foreground underline-offset-4 hover:underline"
+          >
+            Continue shopping
+          </Link>
+        </div>
+
+        {orders.length === 0 ? (
+          <p className="border border-border bg-secondary/30 px-4 py-6 text-sm text-muted-foreground">
+            No orders yet. When you place an order, it will show up here.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {orders.map((order) => {
+              const next = customerNextStep({
+                status: order.status,
+                paymentStatus: order.paymentStatus,
+              });
+              const needsAction =
+                order.status !== "CANCELLED" &&
+                (order.paymentStatus === "PENDING" ||
+                  order.paymentStatus === "REJECTED");
+              return (
+                <li key={order.id}>
+                  <Link
+                    href={`/orders/${order.orderNumber}`}
+                    className={cn(
+                      "group block rounded-lg border bg-card p-4 transition hover:border-foreground/40 sm:p-5",
+                      needsAction ? "border-warning/50" : "border-border",
+                    )}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium">{order.orderNumber}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Placed {formatDate(order.placedAt ?? order.createdAt)}
+                        </p>
+                      </div>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatGbp(order.grandTotalPence ?? order.totalPence)}
+                      </p>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <OrderStatusPill status={order.status} />
+                      <PaymentStatusPill status={order.paymentStatus} />
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3 text-sm">
+                      <span
+                        className={cn(
+                          needsAction ? "font-medium" : "text-muted-foreground",
+                        )}
+                      >
+                        {next.title}
+                        {order.trackingNumber
+                          ? ` · ${order.carrier ? `${order.carrier} ` : ""}${order.trackingNumber}`
+                          : ""}
+                      </span>
+                      <span className="shrink-0 text-xs font-medium underline-offset-4 group-hover:underline">
+                        {needsAction ? "Pay now →" : "View order →"}
+                      </span>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       <section className="space-y-4 border border-border p-5">
         <h2 className="font-display text-xl font-semibold">Profile</h2>
@@ -462,62 +547,6 @@ export function AccountPanel() {
             ) : null}
           </div>
         </div>
-      </section>
-
-      <section className="space-y-4">
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <h2 className="font-display text-xl font-semibold">
-              Orders & tracking
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Open an order for payment status, delivery progress, and tracking.
-            </p>
-          </div>
-          <Link
-            href="/shop"
-            className="text-sm text-muted-foreground underline-offset-4 hover:underline"
-          >
-            Continue shopping
-          </Link>
-        </div>
-
-        {orders.length === 0 ? (
-          <p className="border border-border bg-secondary/30 px-4 py-6 text-sm text-muted-foreground">
-            No orders yet. When you place an order, it will show up here.
-          </p>
-        ) : (
-          <ul className="divide-y divide-border border border-border">
-            {orders.map((order) => (
-              <li key={order.id}>
-                <Link
-                  href={`/orders/${order.orderNumber}`}
-                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 transition-colors hover:bg-secondary/40"
-                >
-                  <div>
-                    <p className="font-medium">{order.orderNumber}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {new Date(order.createdAt).toLocaleDateString("en-GB", {
-                        day: "numeric",
-                        month: "short",
-                        year: "numeric",
-                      })}
-                      {" · "}
-                      {order.status}
-                      {order.paymentStatus ? ` · ${order.paymentStatus}` : ""}
-                      {order.trackingNumber
-                        ? ` · Track ${order.trackingNumber}`
-                        : ""}
-                    </p>
-                  </div>
-                  <p className="text-sm font-medium">
-                    {formatGbp(order.grandTotalPence ?? order.totalPence)}
-                  </p>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
 
       <section className="space-y-4 border border-border p-5">

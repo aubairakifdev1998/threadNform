@@ -287,7 +287,10 @@ export class CreateShipmentUseCase {
     let updated = await syncFulfilmentStatus(this.commerce, order, {
       adminId: input.adminId,
       note:
-        input.note?.trim() || `Shipment ${shipment.id.slice(0, 8)} dispatched`,
+        input.note?.trim() ||
+        `Dispatched: ${lines
+          .map(({ item, quantity }) => `${item.productName} × ${quantity}`)
+          .join(', ')}`,
     });
     // Latest parcel's tracking is shown on the order header.
     if (input.carrier || input.trackingNumber || input.trackingUrl) {

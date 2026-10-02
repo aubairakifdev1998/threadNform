@@ -763,18 +763,32 @@ export class SupabaseCommerceRepository implements CommerceRepository {
         .where(where),
     ]);
 
-    const items = await Promise.all(
-      rows.map(async (row) => {
-        const proofs = await this.listPaymentProofs(row.payment.id);
-        return {
-          ...this.mapPayment(row.payment),
-          orderNumber: row.orderNumber,
-          email: row.email,
-          proofs,
-          proofCount: proofs.length,
-        };
-      }),
-    );
+    // One query for every proof on the page, not one per payment.
+    const paymentIds = rows.map((row) => row.payment.id);
+    const proofRows = paymentIds.length
+      ? await this.db
+          .select()
+          .from(paymentProofs)
+          .where(inArray(paymentProofs.paymentId, paymentIds))
+          .orderBy(desc(paymentProofs.uploadedAt))
+      : [];
+    const proofsByPayment = new Map<string, PaymentProof[]>();
+    for (const row of proofRows) {
+      const list = proofsByPayment.get(row.paymentId) ?? [];
+      list.push(this.mapProof(row));
+      proofsByPayment.set(row.paymentId, list);
+    }
+
+    const items = rows.map((row) => {
+      const proofs = proofsByPayment.get(row.payment.id) ?? [];
+      return {
+        ...this.mapPayment(row.payment),
+        orderNumber: row.orderNumber,
+        email: row.email,
+        proofs,
+        proofCount: proofs.length,
+      };
+    });
 
     return {
       items,
@@ -841,8 +855,8 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       [ordersToday],
       [pendingPayments],
       [processing],
-      stockRows,
-      revenueRows,
+      [lowStock],
+      [revenue],
     ] = await Promise.all([
       this.db
         .select({ value: count() })
@@ -864,18 +878,22 @@ export class SupabaseCommerceRepository implements CommerceRepository {
           ]),
         ),
       this.db
-        .select({
-          onHand: inventoryItems.onHand,
-          reserved: inventoryItems.reserved,
-        })
+        .select({ value: count() })
         .from(inventoryItems)
         .innerJoin(
           productVariants,
           eq(inventoryItems.variantId, productVariants.id),
         )
-        .where(ne(productVariants.status, 'ARCHIVED')),
+        .where(
+          and(
+            ne(productVariants.status, 'ARCHIVED'),
+            sql`${inventoryItems.onHand} - ${inventoryItems.reserved} <= ${options.lowStockThreshold}`,
+          ),
+        ),
       this.db
-        .select({ grandTotalPence: orders.grandTotalPence })
+        .select({
+          value: sql<string>`coalesce(sum(${orders.grandTotalPence}), 0)`,
+        })
         .from(orders)
         .where(
           and(
@@ -885,21 +903,12 @@ export class SupabaseCommerceRepository implements CommerceRepository {
         ),
     ]);
 
-    const lowStockCount = stockRows.filter(
-      (row) => row.onHand - row.reserved <= options.lowStockThreshold,
-    ).length;
-
-    const revenuePence = revenueRows.reduce(
-      (sum, row) => sum + Number(row.grandTotalPence),
-      0,
-    );
-
     return {
       ordersToday: ordersToday?.value ?? 0,
       pendingPaymentVerifications: pendingPayments?.value ?? 0,
       processingOrders: processing?.value ?? 0,
-      lowStockVariants: lowStockCount,
-      revenueTodayPence: revenuePence,
+      lowStockVariants: lowStock?.value ?? 0,
+      revenueTodayPence: Number(revenue?.value ?? 0),
     };
   }
 

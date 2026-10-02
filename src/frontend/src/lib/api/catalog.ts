@@ -20,7 +20,7 @@ export const catalogApi = {
 
   getFilters() {
     return apiRequest<CatalogFilters>("/catalog/filters", {
-      cache: "no-store",
+      next: { revalidate: 300 },
     });
   },
 

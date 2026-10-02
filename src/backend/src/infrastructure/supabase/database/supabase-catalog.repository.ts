@@ -5,11 +5,14 @@ import {
   count,
   desc,
   eq,
+  exists,
+  gt,
   gte,
   ilike,
   inArray,
   isNull,
   lte,
+  sql,
   type SQL,
 } from 'drizzle-orm';
 import type {
@@ -310,18 +313,42 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     maxPricePence?: number;
     publicOnly?: boolean;
   }): Promise<{ items: CommerceProduct[]; total: number }> {
-    const idFilters: string[][] = [];
+    // Every filter is a correlated EXISTS so Postgres plans the whole listing
+    // as one statement, instead of shipping id lists through Node.
+    const conditions: SQL[] = [];
+    if (params.publicOnly) conditions.push(eq(products.status, 'ACTIVE'));
+    else if (params.status)
+      conditions.push(
+        eq(products.status, params.status as CommerceProduct['status']),
+      );
+    if (params.categoryId)
+      conditions.push(eq(products.categoryId, params.categoryId));
+    if (params.brandId) conditions.push(eq(products.brandId, params.brandId));
+    if (params.departmentId)
+      conditions.push(eq(products.departmentId, params.departmentId));
+    if (params.q) conditions.push(ilike(products.name, `%${params.q}%`));
 
     if (params.collectionId) {
-      const rows = await this.db
-        .select({ productId: productCollections.productId })
-        .from(productCollections)
-        .where(eq(productCollections.collectionId, params.collectionId));
-      idFilters.push(rows.map((row) => row.productId));
+      conditions.push(
+        exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(productCollections)
+            .where(
+              and(
+                eq(productCollections.productId, products.id),
+                eq(productCollections.collectionId, params.collectionId),
+              ),
+            ),
+        ),
+      );
     }
 
     if (params.attributeOptionId || params.sizeValueId || params.colorId) {
-      const optConditions: SQL[] = [];
+      // All option conditions apply to the same option row (existing behaviour).
+      const optConditions: SQL[] = [
+        eq(productVariants.productId, products.id),
+      ];
       if (params.attributeOptionId) {
         optConditions.push(
           eq(productVariantOptions.optionId, params.attributeOptionId),
@@ -335,54 +362,48 @@ export class SupabaseCatalogRepository implements CatalogRepository {
       if (params.colorId) {
         optConditions.push(eq(productVariantOptions.colorId, params.colorId));
       }
-
-      const optionRows = await this.db
-        .select({ variantId: productVariantOptions.variantId })
-        .from(productVariantOptions)
-        .where(and(...optConditions));
-      const variantIds = optionRows.map((row) => row.variantId);
-      if (!variantIds.length) {
-        return { items: [], total: 0 };
-      }
-
-      const variants = await this.db
-        .select({ productId: productVariants.productId })
-        .from(productVariants)
-        .where(inArray(productVariants.id, variantIds));
-      idFilters.push(Array.from(new Set(variants.map((row) => row.productId))));
+      conditions.push(
+        exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(productVariantOptions)
+            .innerJoin(
+              productVariants,
+              eq(productVariants.id, productVariantOptions.variantId),
+            )
+            .where(and(...optConditions)),
+        ),
+      );
     }
 
     if (params.inStock === true) {
-      const inventory = await this.db
-        .select({
-          variantId: inventoryItems.variantId,
-          onHand: inventoryItems.onHand,
-          reserved: inventoryItems.reserved,
-        })
-        .from(inventoryItems);
-      const availableVariantIds = inventory
-        .filter((row) => row.onHand - row.reserved > 0)
-        .map((row) => row.variantId);
-      if (!availableVariantIds.length) {
-        return { items: [], total: 0 };
-      }
-      const variants = await this.db
-        .select({ productId: productVariants.productId })
-        .from(productVariants)
-        .where(
-          and(
-            eq(productVariants.status, 'ACTIVE'),
-            inArray(productVariants.id, availableVariantIds),
-          ),
-        );
-      idFilters.push(Array.from(new Set(variants.map((row) => row.productId))));
+      conditions.push(
+        exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(inventoryItems)
+            .innerJoin(
+              productVariants,
+              eq(productVariants.id, inventoryItems.variantId),
+            )
+            .where(
+              and(
+                eq(productVariants.productId, products.id),
+                eq(productVariants.status, 'ACTIVE'),
+                gt(inventoryItems.onHand, inventoryItems.reserved),
+              ),
+            ),
+        ),
+      );
     }
 
     if (
       params.minPricePence !== undefined ||
       params.maxPricePence !== undefined
     ) {
-      const priceConditions: SQL[] = [];
+      const priceConditions: SQL[] = [
+        eq(productPrices.productId, products.id),
+      ];
       if (params.minPricePence !== undefined) {
         priceConditions.push(
           gte(productPrices.basePricePence, params.minPricePence),
@@ -393,38 +414,15 @@ export class SupabaseCatalogRepository implements CatalogRepository {
           lte(productPrices.basePricePence, params.maxPricePence),
         );
       }
-      const prices = await this.db
-        .select({ productId: productPrices.productId })
-        .from(productPrices)
-        .where(and(...priceConditions));
-      idFilters.push(Array.from(new Set(prices.map((row) => row.productId))));
-    }
-
-    let productIds: string[] | undefined;
-    if (idFilters.length) {
-      productIds = idFilters.reduce<string[]>((acc, ids, index) => {
-        if (index === 0) return ids;
-        const set = new Set(ids);
-        return acc.filter((id) => set.has(id));
-      }, []);
-      if (!productIds.length) {
-        return { items: [], total: 0 };
-      }
-    }
-
-    const conditions: SQL[] = [];
-    if (params.publicOnly) conditions.push(eq(products.status, 'ACTIVE'));
-    else if (params.status)
       conditions.push(
-        eq(products.status, params.status as CommerceProduct['status']),
+        exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(productPrices)
+            .where(and(...priceConditions)),
+        ),
       );
-    if (params.categoryId)
-      conditions.push(eq(products.categoryId, params.categoryId));
-    if (params.brandId) conditions.push(eq(products.brandId, params.brandId));
-    if (params.departmentId)
-      conditions.push(eq(products.departmentId, params.departmentId));
-    if (params.q) conditions.push(ilike(products.name, `%${params.q}%`));
-    if (productIds) conditions.push(inArray(products.id, productIds));
+    }
 
     const whereClause = conditions.length ? and(...conditions) : undefined;
     const from = (params.page - 1) * params.pageSize;
@@ -586,7 +584,7 @@ export class SupabaseCatalogRepository implements CatalogRepository {
       attributesList,
       sizeSystemsList,
       colorRows,
-      priceRows,
+      [priceRange],
     ] = await Promise.all([
       this.listDepartments(),
       this.listCategories(),
@@ -604,8 +602,8 @@ export class SupabaseCatalogRepository implements CatalogRepository {
         .orderBy(asc(colors.name)),
       this.db
         .select({
-          basePricePence: productPrices.basePricePence,
-          salePricePence: productPrices.salePricePence,
+          minPence: sql<string | null>`min(coalesce(${productPrices.salePricePence}, ${productPrices.basePricePence}))`,
+          maxPence: sql<string | null>`max(coalesce(${productPrices.salePricePence}, ${productPrices.basePricePence}))`,
         })
         .from(productPrices),
     ]);
@@ -617,18 +615,34 @@ export class SupabaseCatalogRepository implements CatalogRepository {
       ? await this.listSizeSystemValues(clothingSystem.id)
       : [];
 
-    const attributesWithOptions = await Promise.all(
-      attributesList.map(async (attribute) => ({
-        ...attribute,
-        options: await this.listAttributeOptions(attribute.id),
-      })),
-    );
-
-    const amounts = priceRows.map((row) => {
-      const sale =
-        row.salePricePence == null ? null : Number(row.salePricePence);
-      return sale ?? Number(row.basePricePence);
-    });
+    const optionRows = attributesList.length
+      ? await this.db
+          .select()
+          .from(attributeOptions)
+          .where(
+            inArray(
+              attributeOptions.attributeId,
+              attributesList.map((attribute) => attribute.id),
+            ),
+          )
+          .orderBy(asc(attributeOptions.sortOrder))
+      : [];
+    const optionsByAttribute = new Map<string, AttributeOption[]>();
+    for (const row of optionRows) {
+      const list = optionsByAttribute.get(row.attributeId) ?? [];
+      list.push({
+        id: row.id,
+        attributeId: row.attributeId,
+        value: row.value,
+        label: row.label,
+        sortOrder: row.sortOrder,
+      });
+      optionsByAttribute.set(row.attributeId, list);
+    }
+    const attributesWithOptions = attributesList.map((attribute) => ({
+      ...attribute,
+      options: optionsByAttribute.get(attribute.id) ?? [],
+    }));
 
     return {
       departments: departmentsList.filter((d) => d.isActive),
@@ -643,8 +657,8 @@ export class SupabaseCatalogRepository implements CatalogRepository {
       })),
       attributes: attributesWithOptions,
       priceRange: {
-        minPence: amounts.length ? Math.min(...amounts) : null,
-        maxPence: amounts.length ? Math.max(...amounts) : null,
+        minPence: priceRange?.minPence == null ? null : Number(priceRange.minPence),
+        maxPence: priceRange?.maxPence == null ? null : Number(priceRange.maxPence),
       },
     };
   }

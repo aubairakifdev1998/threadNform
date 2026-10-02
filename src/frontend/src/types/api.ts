@@ -159,6 +159,8 @@ export type ProductVariant = {
   basePricePence?: number | null;
   optionFingerprint?: string | null;
   inStock?: boolean;
+  /** Units free to sell when the page was rendered (the API re-checks on add). */
+  available?: number;
 };
 
 export type ProductMedia = {
@@ -186,13 +188,21 @@ export type CartItem = {
   productSlug?: string;
   sku?: string;
   imageUrl?: string | null;
+  /** False when the product/variant was withdrawn or has no price. */
+  purchasable?: boolean;
+  /** Units this cart can have right now (free stock + its own hold). */
+  availableQuantity?: number;
+  /** purchasable and enough stock for the requested quantity. */
+  inStock?: boolean;
 };
 
 export type Cart = {
   id: string;
   guestToken?: string;
   items: CartItem[];
+  /** Sum of purchasable lines only. */
   subtotalPence?: number;
+  hasUnavailableItems?: boolean;
 };
 
 export type ShippingMethod = {

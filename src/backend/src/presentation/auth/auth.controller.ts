@@ -32,6 +32,7 @@ import { RefreshSessionDto } from './dto/refresh-session.dto.js';
 import { SignInDto } from './dto/sign-in.dto.js';
 import { SignUpDto } from './dto/sign-up.dto.js';
 import { SupabaseAuthGuard } from './guards/supabase-auth.guard.js';
+import { RateLimit } from '../common/rate-limit/rate-limit.decorator.js';
 
 class GoogleOAuthQueryDto {
   @IsOptional()
@@ -74,6 +75,7 @@ export class AuthController {
   ) {}
 
   @Post('sign-up')
+  @RateLimit({ name: 'sign-up', max: 5, windowSeconds: 3600 })
   signUp(@Body() dto: SignUpDto) {
     return this.signUpUseCase.execute({
       email: dto.email,
@@ -84,6 +86,10 @@ export class AuthController {
   }
 
   @Post('sign-in')
+  @RateLimit(
+    { name: 'sign-in', max: 20, windowSeconds: 300 },
+    { name: 'sign-in-email', max: 10, windowSeconds: 900, by: 'body:email' },
+  )
   @HttpCode(HttpStatus.OK)
   signIn(@Body() dto: SignInDto) {
     return this.signInUseCase.execute({
@@ -100,19 +106,28 @@ export class AuthController {
   }
 
   @Post('oauth/exchange')
+  @RateLimit({ name: 'oauth-exchange', max: 30, windowSeconds: 300 })
   @HttpCode(HttpStatus.OK)
   exchangeOAuth(@Body() dto: ExchangeOAuthCodeDto) {
     return this.authRepository.exchangeOAuthCode(dto.code);
   }
 
   @Post('forgot-password')
+  @RateLimit(
+    { name: 'forgot-password', max: 5, windowSeconds: 3600 },
+    {
+      name: 'forgot-password-email',
+      max: 3,
+      windowSeconds: 3600,
+      by: 'body:email',
+    },
+  )
   @HttpCode(HttpStatus.OK)
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
     const frontendUrl =
       this.config.get<string>('frontendUrl') ?? 'http://localhost:3001';
     const redirectTo =
-      dto.redirectTo ??
-      `${frontendUrl.replace(/\/$/, '')}/auth/callback`;
+      dto.redirectTo ?? `${frontendUrl.replace(/\/$/, '')}/auth/callback`;
     await this.authRepository.requestPasswordReset(dto.email, redirectTo);
     return {
       message:
@@ -121,6 +136,7 @@ export class AuthController {
   }
 
   @Post('change-password')
+  @RateLimit({ name: 'change-password', max: 10, windowSeconds: 3600 })
   @HttpCode(HttpStatus.OK)
   @UseGuards(SupabaseAuthGuard)
   async changePassword(
@@ -132,6 +148,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @RateLimit({ name: 'refresh', max: 60, windowSeconds: 300 })
   @HttpCode(HttpStatus.OK)
   refresh(@Body() dto: RefreshSessionDto) {
     return this.refreshSessionUseCase.execute(dto.refreshToken);

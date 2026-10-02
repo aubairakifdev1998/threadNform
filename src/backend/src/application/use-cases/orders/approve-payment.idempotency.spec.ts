@@ -46,7 +46,12 @@ describe('ApprovePaymentUseCase idempotency', () => {
 
     useCase = new ApprovePaymentUseCase(
       commerce as never,
+      {
+        run: (work: () => Promise<unknown>) => work(),
+        afterCommit: () => undefined,
+      } as never,
       { get: () => 24 } as unknown as ConfigService,
+      { notify: vi.fn().mockResolvedValue(undefined) } as never,
     );
   });
 

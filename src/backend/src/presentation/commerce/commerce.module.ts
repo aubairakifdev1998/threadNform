@@ -1,5 +1,11 @@
 import { Module } from '@nestjs/common';
 import { CheckoutUseCase } from '../../application/use-cases/checkout/checkout.use-case.js';
+import { ReleaseExpiredHoldsUseCase } from '../../application/use-cases/inventory/release-expired-holds.use-case.js';
+import { CustomerNotifier } from '../../application/use-cases/notifications/customer-notifier.js';
+import {
+  CreateRefundUseCase,
+  CreateShipmentUseCase,
+} from '../../application/use-cases/orders/fulfilment.use-cases.js';
 import { PurgeCustomerUseCase } from '../../application/use-cases/customers/purge-customer.use-case.js';
 import {
   ApprovePaymentUseCase,
@@ -33,6 +39,10 @@ import { SiteContentController } from './site-content.controller.js';
     CancelOrderUseCase,
     TransitionOrderStatusUseCase,
     PurgeCustomerUseCase,
+    ReleaseExpiredHoldsUseCase,
+    CustomerNotifier,
+    CreateShipmentUseCase,
+    CreateRefundUseCase,
     AdminAuthGuard,
     PermissionsGuard,
     RolesGuard,

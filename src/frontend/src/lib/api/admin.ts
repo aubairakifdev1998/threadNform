@@ -1,6 +1,30 @@
 import { apiRequest, apiUpload } from "@/lib/api/client";
 import type { AdminDashboard, OrderSummary, ProductSummary } from "@/types/api";
 
+export type AdminShipment = {
+  id: string;
+  carrier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  note: string | null;
+  shippedAt: string;
+  items: Array<{ orderItemId: string; quantity: number }>;
+};
+
+export type AdminRefund = {
+  id: string;
+  amountPence: number;
+  reason: string;
+  reference: string | null;
+  createdAt: string;
+  items: Array<{
+    orderItemId: string;
+    quantityCancelled: number;
+    quantityReturned: number;
+    restocked: boolean;
+  }>;
+};
+
 export const adminApi = {
   dashboard(accessToken: string) {
     return apiRequest<AdminDashboard>("/admin/dashboard", {
@@ -143,15 +167,12 @@ export const adminApi = {
       basePricePence?: number;
     },
   ) {
-    return apiRequest(
-      `/admin/products/${productId}/variants/${variantId}`,
-      {
-        method: "PATCH",
-        body,
-        accessToken,
-        cache: "no-store",
-      },
-    );
+    return apiRequest(`/admin/products/${productId}/variants/${variantId}`, {
+      method: "PATCH",
+      body,
+      accessToken,
+      cache: "no-store",
+    });
   },
 
   deleteVariant(accessToken: string, productId: string, variantId: string) {
@@ -208,13 +229,20 @@ export const adminApi = {
       carrier?: string | null;
       trackingNumber?: string | null;
       trackingUrl?: string | null;
+      refundedPence?: number;
       items: Array<{
         id: string;
         productName: string;
         sku: string;
         quantity: number;
+        unitGrossPence: number;
         lineGrossPence: number;
+        quantityShipped: number;
+        quantityCancelled: number;
+        quantityReturned: number;
       }>;
+      shipments?: AdminShipment[];
+      refunds?: AdminRefund[];
       payment: {
         id: string;
         status: string;
@@ -236,6 +264,51 @@ export const adminApi = {
       } | null;
     }>(`/admin/orders/${id}`, {
       accessToken,
+      cache: "no-store",
+    });
+  },
+
+  createShipment(
+    accessToken: string,
+    orderId: string,
+    body: {
+      items?: Array<{ orderItemId: string; quantity: number }>;
+      carrier?: string;
+      trackingNumber?: string;
+      trackingUrl?: string;
+      note?: string;
+    },
+    idempotencyKey: string,
+  ) {
+    return apiRequest(`/admin/orders/${orderId}/shipments`, {
+      method: "POST",
+      body,
+      accessToken,
+      idempotencyKey,
+      cache: "no-store",
+    });
+  },
+
+  createRefund(
+    accessToken: string,
+    orderId: string,
+    body: {
+      amountPence: number;
+      reason: string;
+      reference?: string;
+      items?: Array<{
+        orderItemId: string;
+        quantity: number;
+        restock?: boolean;
+      }>;
+    },
+    idempotencyKey: string,
+  ) {
+    return apiRequest(`/admin/orders/${orderId}/refunds`, {
+      method: "POST",
+      body,
+      accessToken,
+      idempotencyKey,
       cache: "no-store",
     });
   },
@@ -361,11 +434,7 @@ export const adminApi = {
     });
   },
 
-  approvePayment(
-    accessToken: string,
-    id: string,
-    idempotencyKey: string,
-  ) {
+  approvePayment(accessToken: string, id: string, idempotencyKey: string) {
     return apiRequest(`/admin/payments/${id}/approve`, {
       method: "POST",
       accessToken,

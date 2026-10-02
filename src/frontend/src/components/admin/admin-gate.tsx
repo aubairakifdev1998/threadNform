@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AdminGateShimmer } from "@/components/ui/page-shimmers";
-import { authApi } from "@/lib/api";
+import { fetchCurrentUser } from "@/lib/auth/current-user";
 import { tokenStore } from "@/lib/auth/session";
 import { ApiError } from "@/lib/api/client";
 
@@ -24,14 +24,24 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
           setMessage("Sign in with an admin account to continue.");
           setAllowed(false);
           setReady(true);
-          router.replace(`/login?next=${encodeURIComponent(pathname || "/admin")}`);
+          router.replace(
+            `/login?next=${encodeURIComponent(pathname || "/admin")}`,
+          );
         }
         return;
       }
 
       try {
-        const me = await authApi.me(token);
+        const me = await fetchCurrentUser();
         if (cancelled) return;
+        if (!me) {
+          setAllowed(false);
+          setReady(true);
+          router.replace(
+            `/login?next=${encodeURIComponent(pathname || "/admin")}`,
+          );
+          return;
+        }
         if (!me.isAdmin) {
           setMessage("This account is not an admin. Contact the store owner.");
           setAllowed(false);
@@ -42,15 +52,14 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
         setReady(true);
       } catch (error) {
         if (cancelled) return;
-        tokenStore.clearSession();
+        // Transient failure: keep the session, show a retryable message.
         setAllowed(false);
         setReady(true);
         setMessage(
           error instanceof ApiError
             ? error.message
-            : "Unable to verify admin session",
+            : "Unable to verify admin session. Refresh to try again.",
         );
-        router.replace(`/login?next=${encodeURIComponent(pathname || "/admin")}`);
       }
     }
 

@@ -30,6 +30,13 @@ export const catalogApi = {
     });
   },
 
+  /** Uncached read for live stock (the page itself may be up to 60s old). */
+  getLiveProductBySlug(slug: string) {
+    return apiRequest<ProductDetail>(`/products/${slug}`, {
+      cache: "no-store",
+    });
+  },
+
   listDepartments() {
     return apiRequest<CatalogFilters["departments"]>("/departments", {
       next: { revalidate: 300 },

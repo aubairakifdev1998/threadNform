@@ -7,14 +7,15 @@ export default () => ({
     .map((s) => s.trim())
     .filter(Boolean),
   cartTokenSecret: process.env.CART_TOKEN_SECRET ?? 'dev-cart-secret-change-me',
+  cronSecret: process.env.CRON_SECRET ?? '',
+  rateLimit: {
+    // Only for automated test runs; never disable in production.
+    enabled: process.env.RATE_LIMIT_ENABLED !== 'false',
+  },
   idempotencyTtlHours: parseInt(process.env.IDEMPOTENCY_TTL_HOURS ?? '24', 10),
   maxUploadBytes: parseInt(process.env.MAX_UPLOAD_BYTES ?? '10485760', 10),
   defaultCurrency: process.env.DEFAULT_CURRENCY ?? 'GBP',
   defaultCountry: process.env.DEFAULT_COUNTRY ?? 'GB',
-  throttle: {
-    ttlMs: parseInt(process.env.THROTTLE_TTL_MS ?? '60000', 10),
-    limit: parseInt(process.env.THROTTLE_LIMIT ?? '120', 10),
-  },
   smtp: {
     host: process.env.SMTP_HOST ?? '',
     port: parseInt(process.env.SMTP_PORT ?? '587', 10),

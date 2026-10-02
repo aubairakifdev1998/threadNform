@@ -28,8 +28,14 @@ export function ProductVariantSelector({
     );
   }, [options.length, selected, variants]);
 
+  const soldOut =
+    selectedVariant != null &&
+    (selectedVariant.inStock === false ||
+      (typeof selectedVariant.available === "number" &&
+        selectedVariant.available <= 0));
+
   async function handleAdd() {
-    if (!selectedVariant) return;
+    if (!selectedVariant || soldOut) return;
     if (!onAddToCart) return;
     setPending(true);
     try {
@@ -92,10 +98,12 @@ export function ProductVariantSelector({
       <button
         type="button"
         className="inline-flex h-12 w-full items-center justify-center bg-secondary text-sm font-semibold uppercase tracking-[0.16em] text-foreground transition hover:bg-secondary/80 disabled:opacity-50"
-        disabled={!selectedVariant || pending}
+        disabled={!selectedVariant || pending || soldOut}
         onClick={handleAdd}
       >
-        {pending ? (
+        {soldOut ? (
+          "Sold out"
+        ) : pending ? (
           <span className="inline-flex items-center gap-2">
             <Loader2 className="size-4 animate-spin" aria-hidden />
             Adding…

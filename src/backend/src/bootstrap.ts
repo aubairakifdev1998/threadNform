@@ -22,10 +22,7 @@ function resolveCorsOrigins(config: ConfigService): string[] {
   return [...origins];
 }
 
-function attachAuthRedirectPages(
-  expressApp: Express,
-  frontendUrl: string,
-) {
+function attachAuthRedirectPages(expressApp: Express, frontendUrl: string) {
   const target = `${frontendUrl.replace(/\/$/, '')}/auth/callback`;
   const redirectHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -64,14 +61,11 @@ function attachAuthRedirectPages(
   });
 }
 
-export async function createNestApp(
-  expressApp: Express = express(),
-): Promise<{ app: INestApplication; expressApp: Express }> {
-  const app = await NestFactory.create(
-    AppModule,
-    new ExpressAdapter(expressApp),
-    { bodyParser: true },
-  );
+/**
+ * Global prefix, CORS, validation, error envelope — everything the HTTP
+ * contract depends on. Shared by the server entrypoints and integration tests.
+ */
+export function configureApp(app: INestApplication): ConfigService {
   const config = app.get(ConfigService);
 
   const prefix = config.get<string>('apiPrefix') ?? 'api/v1';
@@ -125,6 +119,19 @@ export async function createNestApp(
   );
   app.useGlobalFilters(new DomainExceptionFilter());
   app.useGlobalInterceptors(new ResponseEnvelopeInterceptor());
+
+  return config;
+}
+
+export async function createNestApp(
+  expressApp: Express = express(),
+): Promise<{ app: INestApplication; expressApp: Express }> {
+  const app = await NestFactory.create(
+    AppModule,
+    new ExpressAdapter(expressApp),
+    { bodyParser: true },
+  );
+  const config = configureApp(app);
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Fareya Commerce API')

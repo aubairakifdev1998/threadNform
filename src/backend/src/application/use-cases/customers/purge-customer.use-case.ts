@@ -1,9 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { eq } from 'drizzle-orm';
 import {
+  ConflictException,
   NotFoundException,
-  ValidationException,
 } from '../../../domain/exceptions/domain.exception.js';
 import {
   CART_REPOSITORY,
@@ -12,6 +12,7 @@ import {
 import {
   COMMERCE_REPOSITORY,
   type CommerceRepository,
+  type Order,
 } from '../../../domain/repositories/commerce.repository.js';
 import {
   CUSTOMER_REPOSITORY,
@@ -22,7 +23,14 @@ import {
   type InventoryRepository,
 } from '../../../domain/repositories/inventory.repository.js';
 import { isCancellable } from '../../../domain/orders/order-status.js';
-import { DRIZZLE, type DrizzleDB } from '../../../infrastructure/drizzle/drizzle.tokens.js';
+import {
+  UNIT_OF_WORK,
+  type UnitOfWork,
+} from '../../../domain/repositories/unit-of-work.js';
+import {
+  DRIZZLE,
+  type DrizzleDB,
+} from '../../../infrastructure/drizzle/drizzle.tokens.js';
 import {
   carts,
   customerAddresses,
@@ -33,14 +41,19 @@ import { CancelOrderUseCase } from '../orders/order-lifecycle.use-cases.js';
 
 @Injectable()
 export class PurgeCustomerUseCase {
+  private readonly logger = new Logger(PurgeCustomerUseCase.name);
+
   constructor(
-    @Inject(CUSTOMER_REPOSITORY) private readonly customersRepo: CustomerRepository,
+    @Inject(CUSTOMER_REPOSITORY)
+    private readonly customersRepo: CustomerRepository,
     @Inject(COMMERCE_REPOSITORY) private readonly commerce: CommerceRepository,
     @Inject(CART_REPOSITORY) private readonly cartsRepo: CartRepository,
-    @Inject(INVENTORY_REPOSITORY) private readonly inventory: InventoryRepository,
+    @Inject(INVENTORY_REPOSITORY)
+    private readonly inventory: InventoryRepository,
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     @Inject(SUPABASE_ADMIN_CLIENT) private readonly supabase: SupabaseClient,
     private readonly cancelOrder: CancelOrderUseCase,
+    @Inject(UNIT_OF_WORK) private readonly uow: UnitOfWork,
   ) {}
 
   async execute(input: {
@@ -51,18 +64,25 @@ export class PurgeCustomerUseCase {
     const customer = await this.customersRepo.findById(input.customerId);
     if (!customer) throw new NotFoundException('Customer', input.customerId);
 
-    const orders = await this.commerce.listOrders({
-      page: 1,
-      pageSize: 500,
-      customerId: customer.id,
-    });
+    // Snapshot every order first; purging while paging would shift pages.
+    const allOrders: Order[] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.commerce.listOrders({
+        page,
+        pageSize: 100,
+        customerId: customer.id,
+      });
+      allOrders.push(...batch.items);
+      if (batch.items.length < 100) break;
+    }
 
     let cancelled = 0;
     let purgedOrders = 0;
 
-    for (const order of orders.items) {
-      if (isCancellable(order.status)) {
-        try {
+    for (const order of allOrders) {
+      // Each order is cancelled (stock released) and purged atomically.
+      await this.uow.run(async () => {
+        if (isCancellable(order.status)) {
           await this.cancelOrder.execute({
             orderId: order.id,
             actorType: 'ADMIN',
@@ -70,47 +90,38 @@ export class PurgeCustomerUseCase {
             reason: 'Customer profile purged by admin',
           });
           cancelled += 1;
-        } catch {
-          // continue purge even if cancel fails (e.g. race)
         }
-      }
-
-      if (input.deleteOrders !== false) {
-        await this.commerce.purgeOrderCascade(order.id);
-        purgedOrders += 1;
-      }
+        if (input.deleteOrders !== false) {
+          await this.commerce.purgeOrderCascade(order.id);
+          purgedOrders += 1;
+        }
+      });
     }
 
-    // Active carts for this customer
-    const cartRows = await this.db
-      .select({ id: carts.id })
-      .from(carts)
-      .where(eq(carts.customerId, customer.id));
-
     const warehouse = await this.inventory.getDefaultWarehouse();
-    for (const cart of cartRows) {
-      const cartId = cart.id;
-      const items = await this.cartsRepo.listItems(cartId);
-      if (warehouse) {
-        for (const item of items) {
-          try {
-            await this.inventory.release({
+    await this.uow.run(async () => {
+      const cartRows = await this.db
+        .select({ id: carts.id })
+        .from(carts)
+        .where(eq(carts.customerId, customer.id));
+      for (const cart of cartRows) {
+        if (warehouse) {
+          for (const item of await this.cartsRepo.listItems(cart.id)) {
+            await this.inventory.setHold({
               warehouseId: warehouse.id,
               variantId: item.variantId,
-              qty: item.quantity,
+              quantity: 0,
               referenceType: 'CART',
-              referenceId: cartId,
+              referenceId: cart.id,
               actorType: 'ADMIN',
               actorId: input.adminId,
               reason: 'Customer purge — release cart hold',
             });
-          } catch {
-            // Cart may not have held stock
           }
         }
+        await this.db.delete(carts).where(eq(carts.id, cart.id));
       }
-      await this.db.delete(carts).where(eq(carts.id, cartId));
-    }
+    });
 
     await this.db
       .delete(customerAddresses)
@@ -119,8 +130,12 @@ export class PurgeCustomerUseCase {
     try {
       await this.db.delete(customers).where(eq(customers.id, customer.id));
     } catch (err) {
-      throw new ValidationException(
-        `Could not delete customer row: ${err instanceof Error ? err.message : String(err)}`,
+      this.logger.error(
+        `Could not delete customer ${customer.id}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      throw new ConflictException(
+        'This customer still has orders on record. Delete their orders too, or block the account instead.',
         'CUSTOMER_DELETE_FAILED',
       );
     }
@@ -128,8 +143,11 @@ export class PurgeCustomerUseCase {
     const { error: authErr } = await this.supabase.auth.admin.deleteUser(
       customer.id,
     );
-    if (authErr) {
-      // Customer row gone; auth may already be missing
+    if (authErr && authErr.status !== 404) {
+      // Profile data is gone; the login must not survive silently.
+      this.logger.error(
+        `Customer ${customer.id} purged but auth user deletion failed: ${authErr.message}`,
+      );
     }
 
     await this.commerce.writeAudit({

@@ -2,6 +2,9 @@ import { cartApi } from "@/lib/api";
 import { guestCartStore } from "@/lib/auth/session";
 import type { Cart } from "@/types/api";
 
+/** Matches the API's per-line cap. */
+export const MAX_CART_LINE_QUANTITY = 99;
+
 export type GuestCartSession = {
   cartId: string;
   guestToken: string;

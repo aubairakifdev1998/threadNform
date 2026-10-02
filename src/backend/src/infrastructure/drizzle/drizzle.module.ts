@@ -2,24 +2,27 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import { RATE_LIMITER } from '../../domain/repositories/rate-limiter.js';
+import { UNIT_OF_WORK } from '../../domain/repositories/unit-of-work.js';
+import { DrizzleRateLimiter } from './drizzle-rate-limiter.js';
+import { DrizzleUnitOfWork } from './drizzle-unit-of-work.js';
 import * as schema from './schema/index.js';
 import { DRIZZLE } from './drizzle.tokens.js';
+
+const DRIZZLE_UNIT_OF_WORK = Symbol('DRIZZLE_UNIT_OF_WORK');
 
 @Global()
 @Module({
   imports: [ConfigModule],
   providers: [
     {
-      provide: DRIZZLE,
+      provide: DRIZZLE_UNIT_OF_WORK,
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const connectionString =
-          config.get<string>('database.url') ||
-          process.env.DATABASE_URL;
+          config.get<string>('database.url') || process.env.DATABASE_URL;
         if (!connectionString) {
-          throw new Error(
-            'Missing DATABASE_URL — required for Drizzle ORM',
-          );
+          throw new Error('Missing DATABASE_URL — required for Drizzle ORM');
         }
         const pool = new Pool({
           connectionString,
@@ -28,10 +31,20 @@ import { DRIZZLE } from './drizzle.tokens.js';
             ? { rejectUnauthorized: false }
             : undefined,
         });
-        return drizzle(pool, { schema });
+        return new DrizzleUnitOfWork(drizzle(pool, { schema }));
       },
     },
+    {
+      provide: DRIZZLE,
+      inject: [DRIZZLE_UNIT_OF_WORK],
+      useFactory: (uow: DrizzleUnitOfWork) => uow.createScopedDb(),
+    },
+    {
+      provide: UNIT_OF_WORK,
+      useExisting: DRIZZLE_UNIT_OF_WORK,
+    },
+    { provide: RATE_LIMITER, useClass: DrizzleRateLimiter },
   ],
-  exports: [DRIZZLE],
+  exports: [DRIZZLE, UNIT_OF_WORK, RATE_LIMITER],
 })
 export class DrizzleModule {}

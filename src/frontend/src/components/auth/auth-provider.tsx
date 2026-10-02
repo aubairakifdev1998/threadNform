@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { authApi } from "@/lib/api";
+import { fetchCurrentUser } from "@/lib/auth/current-user";
 import { tokenStore } from "@/lib/auth/session";
 import type { User } from "@/types/api";
 
@@ -27,18 +28,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const token = tokenStore.getAccessToken();
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
     try {
-      const me = await authApi.me(token);
-      setUser(me);
+      setUser(await fetchCurrentUser());
     } catch {
-      tokenStore.clearSession();
-      setUser(null);
+      // Transient (offline / server error): keep the stored session.
     } finally {
       setLoading(false);
     }

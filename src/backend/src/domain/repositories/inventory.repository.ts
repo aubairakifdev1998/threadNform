@@ -44,7 +44,10 @@ export interface InventoryRepository {
     name: string;
     isDefault?: boolean;
   }): Promise<Warehouse>;
-  getItem(warehouseId: string, variantId: string): Promise<InventoryItem | null>;
+  getItem(
+    warehouseId: string,
+    variantId: string,
+  ): Promise<InventoryItem | null>;
   listItems(params: {
     page: number;
     pageSize: number;
@@ -59,6 +62,8 @@ export interface InventoryRepository {
     actorType?: string;
     actorId?: string | null;
     reason?: string | null;
+    referenceType?: string | null;
+    referenceId?: string | null;
   }): Promise<InventoryItem>;
   reserve(input: {
     warehouseId: string;
@@ -69,6 +74,7 @@ export interface InventoryRepository {
     actorType?: string;
     actorId?: string | null;
   }): Promise<InventoryItem>;
+  /** Releases up to `qty` of this reference's own hold; no-op when it holds nothing. */
   release(input: {
     warehouseId: string;
     variantId: string;
@@ -78,7 +84,25 @@ export interface InventoryRepository {
     actorType?: string;
     actorId?: string | null;
     reason?: string | null;
-  }): Promise<InventoryItem>;
+  }): Promise<InventoryItem | null>;
+  /** Moves this reference's hold to exactly `quantity` units (0 releases it). */
+  setHold(input: {
+    warehouseId: string;
+    variantId: string;
+    quantity: number;
+    referenceType: string;
+    referenceId: string;
+    actorType?: string;
+    actorId?: string | null;
+    reason?: string | null;
+  }): Promise<InventoryItem | null>;
+  /** Units currently held by one reference (cart or order). */
+  getHold(input: {
+    warehouseId: string;
+    variantId: string;
+    referenceType: string;
+    referenceId: string;
+  }): Promise<number>;
   fulfill(input: {
     warehouseId: string;
     variantId: string;

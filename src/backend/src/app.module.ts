@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import configuration from './infrastructure/config/configuration.js';
 import { validateEnv } from './infrastructure/config/env.validation.js';
 import { DrizzleModule } from './infrastructure/drizzle/drizzle.module.js';
 import { SupabaseModule } from './infrastructure/supabase/supabase.module.js';
 import { AuthModule } from './presentation/auth/auth.module.js';
 import { CommerceModule } from './presentation/commerce/commerce.module.js';
+import { RateLimitGuard } from './presentation/common/rate-limit/rate-limit.guard.js';
 import { HealthModule } from './presentation/health/health.module.js';
 import { StorageModule } from './presentation/storage/storage.module.js';
 
@@ -25,5 +27,6 @@ import { StorageModule } from './presentation/storage/storage.module.js';
     StorageModule,
     HealthModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: RateLimitGuard }],
 })
 export class AppModule {}

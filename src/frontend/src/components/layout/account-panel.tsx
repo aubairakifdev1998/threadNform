@@ -9,13 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import {
-  addressesApi,
-  authApi,
-  customersApi,
-  ordersApi,
-} from "@/lib/api";
+import { addressesApi, authApi, customersApi, ordersApi } from "@/lib/api";
 import { ApiError } from "@/lib/api/client";
+import { fetchCurrentUser } from "@/lib/auth/current-user";
 import { tokenStore } from "@/lib/auth/session";
 import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -67,14 +63,20 @@ export function AccountPanel() {
     }
 
     try {
-      const me = await authApi.me(token);
+      const me = await fetchCurrentUser();
+      if (!me) {
+        setUser(null);
+        toast.error("Session expired — please sign in again");
+        return;
+      }
       setUser(me);
+      const fresh = tokenStore.getAccessToken() ?? token;
 
       const [profileResult, ordersResult, addressesResult] =
         await Promise.allSettled([
-          customersApi.getProfile(token),
-          ordersApi.list(token),
-          addressesApi.list(token),
+          customersApi.getProfile(fresh),
+          ordersApi.list(fresh),
+          addressesApi.list(fresh),
         ]);
 
       if (profileResult.status === "fulfilled") {
@@ -97,14 +99,12 @@ export function AccountPanel() {
           : [],
       );
     } catch (error) {
-      tokenStore.clearSession();
-      setUser(null);
-      setProfile(null);
-      setOrders([]);
-      setAddresses([]);
-      if (error instanceof ApiError && error.status === 401) {
-        toast.error("Session expired — please sign in again");
-      }
+      // Transient failure: stay signed in and let the user retry.
+      toast.error(
+        error instanceof ApiError
+          ? error.message
+          : "Could not load your account",
+      );
     } finally {
       setLoading(false);
     }
@@ -288,7 +288,11 @@ export function AccountPanel() {
               Admin
             </Link>
           ) : null}
-          <Button type="button" variant="outline" onClick={() => void signOut()}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void signOut()}
+          >
             Sign out
           </Button>
         </div>
@@ -329,7 +333,9 @@ export function AccountPanel() {
       </section>
 
       <section className="space-y-4 border border-border p-5">
-        <h2 className="font-display text-xl font-semibold">Delivery addresses</h2>
+        <h2 className="font-display text-xl font-semibold">
+          Delivery addresses
+        </h2>
         <p className="text-sm text-muted-foreground">
           UK delivery addresses for checkout. Mark one as default shipping.
         </p>
@@ -461,7 +467,9 @@ export function AccountPanel() {
       <section className="space-y-4">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <h2 className="font-display text-xl font-semibold">Orders & tracking</h2>
+            <h2 className="font-display text-xl font-semibold">
+              Orders & tracking
+            </h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Open an order for payment status, delivery progress, and tracking.
             </p>
@@ -516,7 +524,10 @@ export function AccountPanel() {
         <h2 className="font-display text-xl font-semibold">Password</h2>
         <p className="text-sm text-muted-foreground">
           Change your password while signed in, or use{" "}
-          <Link href="/forgot-password" className="underline underline-offset-4">
+          <Link
+            href="/forgot-password"
+            className="underline underline-offset-4"
+          >
             forgot password
           </Link>{" "}
           if you need an email reset.

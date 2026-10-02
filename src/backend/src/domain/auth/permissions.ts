@@ -3,6 +3,7 @@ export type AdminRole = 'OWNER' | 'ADMIN' | 'STAFF';
 export const Permission = {
   MANAGE_ADMINS: 'MANAGE_ADMINS',
   MANAGE_BANK_CONFIG: 'MANAGE_BANK_CONFIG',
+  MANAGE_SETTINGS: 'MANAGE_SETTINGS',
   CATALOG_WRITE: 'CATALOG_WRITE',
   CATALOG_READ: 'CATALOG_READ',
   PRICE_EDIT: 'PRICE_EDIT',
@@ -23,8 +24,9 @@ const ALL = Object.values(Permission);
 
 export const ROLE_PERMISSIONS: Record<AdminRole, readonly Permission[]> = {
   OWNER: ALL,
+  // Bank details are OWNER-only (spec §10): changing them redirects customer money.
   ADMIN: [
-    Permission.MANAGE_BANK_CONFIG,
+    Permission.MANAGE_SETTINGS,
     Permission.CATALOG_WRITE,
     Permission.CATALOG_READ,
     Permission.PRICE_EDIT,
@@ -47,6 +49,9 @@ export const ROLE_PERMISSIONS: Record<AdminRole, readonly Permission[]> = {
   ],
 };
 
-export function hasPermission(role: AdminRole, permission: Permission): boolean {
+export function hasPermission(
+  role: AdminRole,
+  permission: Permission,
+): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);
 }

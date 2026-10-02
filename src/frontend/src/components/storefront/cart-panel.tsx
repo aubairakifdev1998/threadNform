@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { buttonVariants } from "@/components/ui/button";
 import { Button } from "@/components/ui/button";
 import {
+  MAX_CART_LINE_QUANTITY,
   loadGuestCart,
   removeGuestCartItem,
   updateGuestCartItem,
@@ -93,6 +94,8 @@ export function CartPanel() {
       toast.error(
         error instanceof ApiError ? error.message : "Stock update failed",
       );
+      // Show the server's view (e.g. stock changed) rather than a stale one.
+      await refresh();
     } finally {
       setBusyId(null);
     }
@@ -127,6 +130,7 @@ export function CartPanel() {
       (sum, item) => sum + (item.unitPricePence ?? 0) * item.quantity,
       0,
     );
+  const blocked = items.some((item) => item.inStock === false);
 
   return (
     <div className="mx-auto max-w-3xl space-y-8 px-4 py-16 sm:px-6 lg:px-8">
@@ -153,9 +157,19 @@ export function CartPanel() {
                 {item.productName ?? item.sku ?? "Item"}
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                {item.sku ? `${item.sku} · ` : ""}
-                stock-linked line
+                {item.sku ?? ""}
               </p>
+              {item.purchasable === false ? (
+                <p className="mt-1 text-xs font-medium text-destructive">
+                  No longer available — remove it to continue.
+                </p>
+              ) : item.inStock === false ? (
+                <p className="mt-1 text-xs font-medium text-destructive">
+                  {item.availableQuantity
+                    ? `Only ${item.availableQuantity} left — reduce the quantity to continue.`
+                    : "Out of stock — remove it to continue."}
+                </p>
+              ) : null}
               <div className="mt-2 flex items-center gap-2">
                 <Button
                   type="button"
@@ -175,7 +189,13 @@ export function CartPanel() {
                   type="button"
                   size="sm"
                   variant="outline"
-                  disabled={busyId === item.id}
+                  disabled={
+                    busyId === item.id ||
+                    item.quantity >= MAX_CART_LINE_QUANTITY ||
+                    item.purchasable === false ||
+                    (item.availableQuantity !== undefined &&
+                      item.quantity >= item.availableQuantity)
+                  }
                   onClick={() => void changeQty(item.id, item.quantity + 1)}
                 >
                   +
@@ -206,9 +226,15 @@ export function CartPanel() {
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <Link href="/checkout" className={cn(buttonVariants())}>
-          Checkout
-        </Link>
+        {blocked ? (
+          <Button type="button" disabled>
+            Checkout
+          </Button>
+        ) : (
+          <Link href="/checkout" className={cn(buttonVariants())}>
+            Checkout
+          </Link>
+        )}
         <Link
           href="/shop"
           className={cn(buttonVariants({ variant: "outline" }))}

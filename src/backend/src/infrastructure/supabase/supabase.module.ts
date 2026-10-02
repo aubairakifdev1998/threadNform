@@ -9,8 +9,8 @@ import { CATALOG_REPOSITORY } from '../../domain/repositories/catalog.repository
 import { COMMERCE_REPOSITORY } from '../../domain/repositories/commerce.repository.js';
 import { CUSTOMER_ADDRESS_REPOSITORY } from '../../domain/repositories/customer-address.repository.js';
 import { CUSTOMER_REPOSITORY } from '../../domain/repositories/customer.repository.js';
+import { NOTIFICATION_OUTBOX_REPOSITORY } from '../../domain/repositories/notification-outbox.repository.js';
 import { INVENTORY_REPOSITORY } from '../../domain/repositories/inventory.repository.js';
-import { PRODUCT_REPOSITORY } from '../../domain/repositories/product.repository.js';
 import { SITE_CONTENT_REPOSITORY } from '../../domain/repositories/site-content.repository.js';
 import { STORAGE_REPOSITORY } from '../../domain/repositories/storage.repository.js';
 import { PLATFORM_SETTINGS_REPOSITORY } from '../../domain/repositories/platform-settings.repository.js';
@@ -23,14 +23,11 @@ import { SupabaseCommerceRepository } from './database/supabase-commerce.reposit
 import { SupabaseCustomerAddressRepository } from './database/supabase-customer-address.repository.js';
 import { SupabaseCustomerRepository } from './database/supabase-customer.repository.js';
 import { SupabaseInventoryRepository } from './database/supabase-inventory.repository.js';
+import { SupabaseNotificationOutboxRepository } from './database/supabase-notification-outbox.repository.js';
 import { SupabasePlatformSettingsRepository } from './database/supabase-platform-settings.repository.js';
-import { SupabaseProductRepository } from './database/supabase-product.repository.js';
 import { SupabaseSiteContentRepository } from './database/supabase-site-content.repository.js';
 import { SupabaseStorageRepository } from './storage/supabase-storage.repository.js';
-import {
-  SUPABASE_ADMIN_CLIENT,
-  SUPABASE_CLIENT,
-} from './supabase.tokens.js';
+import { SUPABASE_ADMIN_CLIENT, SUPABASE_CLIENT } from './supabase.tokens.js';
 
 @Module({
   imports: [ConfigModule],
@@ -56,7 +53,6 @@ import {
         ),
     },
     { provide: AUTH_REPOSITORY, useClass: SupabaseAuthRepository },
-    { provide: PRODUCT_REPOSITORY, useClass: SupabaseProductRepository },
     { provide: STORAGE_REPOSITORY, useClass: SupabaseStorageRepository },
     { provide: ADMIN_USER_REPOSITORY, useClass: SupabaseAdminUserRepository },
     { provide: CUSTOMER_REPOSITORY, useClass: SupabaseCustomerRepository },
@@ -77,12 +73,15 @@ import {
       useClass: SupabasePlatformSettingsRepository,
     },
     { provide: NOTIFICATION_PORT, useClass: EmailNotificationAdapter },
+    {
+      provide: NOTIFICATION_OUTBOX_REPOSITORY,
+      useClass: SupabaseNotificationOutboxRepository,
+    },
   ],
   exports: [
     SUPABASE_CLIENT,
     SUPABASE_ADMIN_CLIENT,
     AUTH_REPOSITORY,
-    PRODUCT_REPOSITORY,
     STORAGE_REPOSITORY,
     ADMIN_USER_REPOSITORY,
     CUSTOMER_REPOSITORY,
@@ -94,6 +93,7 @@ import {
     SITE_CONTENT_REPOSITORY,
     PLATFORM_SETTINGS_REPOSITORY,
     NOTIFICATION_PORT,
+    NOTIFICATION_OUTBOX_REPOSITORY,
   ],
 })
 export class SupabaseModule {}

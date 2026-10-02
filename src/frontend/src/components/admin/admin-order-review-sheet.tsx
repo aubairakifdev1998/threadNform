@@ -20,6 +20,7 @@ import { tokenStore } from "@/lib/auth/session";
 import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/page-shimmers";
+import { AdminOrderFulfilment } from "@/components/admin/admin-order-fulfilment";
 
 type AdminOrderDetail = Awaited<ReturnType<typeof adminApi.getOrder>>;
 
@@ -83,7 +84,12 @@ export function AdminOrderReviewSheet({
     Boolean(payment) &&
     NEEDS_PAYMENT_REVIEW.has(payment?.status ?? "") &&
     proofs.length === 0;
-  const paymentVerified = payment?.status === "VERIFIED";
+  const paymentVerified = [
+    "VERIFIED",
+    "PARTIALLY_REFUNDED",
+    "REFUND_PENDING",
+    "REFUNDED",
+  ].includes(payment?.status ?? "");
 
   async function approve() {
     const token = tokenStore.getAccessToken();
@@ -99,9 +105,7 @@ export function AdminOrderReviewSheet({
       await load(order!.id);
       onChanged?.();
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Approve failed",
-      );
+      toast.error(error instanceof ApiError ? error.message : "Approve failed");
     } finally {
       setBusy(false);
     }
@@ -123,9 +127,7 @@ export function AdminOrderReviewSheet({
       await load(order!.id);
       onChanged?.();
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Reject failed",
-      );
+      toast.error(error instanceof ApiError ? error.message : "Reject failed");
     } finally {
       setBusy(false);
     }
@@ -138,9 +140,7 @@ export function AdminOrderReviewSheet({
         className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-lg"
       >
         <SheetHeader className="border-b border-border pb-4">
-          <SheetTitle>
-            {order?.orderNumber ?? "Order review"}
-          </SheetTitle>
+          <SheetTitle>{order?.orderNumber ?? "Order review"}</SheetTitle>
           <SheetDescription>
             Check payment evidence before confirming. Approval verifies the
             transfer and moves the order to CONFIRMED.
@@ -192,7 +192,34 @@ export function AdminOrderReviewSheet({
                 ) : null}
               </div>
 
-              {order.items?.length ? (
+              {paymentVerified && order.items?.length ? (
+                <AdminOrderFulfilment
+                  key={JSON.stringify([
+                    order.status,
+                    order.refundedPence,
+                    order.items.map((i) => [
+                      i.quantityShipped,
+                      i.quantityCancelled,
+                      i.quantityReturned,
+                    ]),
+                  ])}
+                  orderId={order.id}
+                  orderStatus={order.status}
+                  paymentStatus={payment?.status ?? order.paymentStatus}
+                  grandTotalPence={
+                    order.grandTotalPence ?? payment?.amountDuePence ?? 0
+                  }
+                  refundedPence={order.refundedPence ?? 0}
+                  items={order.items}
+                  shipments={order.shipments ?? []}
+                  refunds={order.refunds ?? []}
+                  canRefund
+                  onChanged={async () => {
+                    await load(order.id);
+                    onChanged?.();
+                  }}
+                />
+              ) : order.items?.length ? (
                 <div className="space-y-2">
                   <h3 className="text-sm font-medium">Items</h3>
                   <ul className="divide-y divide-border border border-border text-sm">
@@ -332,8 +359,8 @@ export function AdminOrderReviewSheet({
         {order && paymentVerified ? (
           <SheetFooter className="mt-auto border-t border-border pt-4">
             <p className="text-sm text-muted-foreground">
-              Payment verified. Continue fulfilment from the orders list
-              (Processing → Packed → Shipped).
+              Payment verified. Record shipments (all or some items) and refunds
+              above; status steps are also on the orders list.
             </p>
           </SheetFooter>
         ) : null}

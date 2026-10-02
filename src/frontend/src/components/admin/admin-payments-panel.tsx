@@ -96,6 +96,8 @@ export function AdminPaymentsPanel() {
   const [bankForm, setBankForm] = useState(emptyBank);
   const [editingBankId, setEditingBankId] = useState<string | null>(null);
   const [savingBank, setSavingBank] = useState(false);
+  // Bank details are OWNER-only; other roles get a 403 from the API.
+  const [bankOwnerOnly, setBankOwnerOnly] = useState(false);
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -108,8 +110,22 @@ export function AdminPaymentsPanel() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const loadBanks = useCallback(async (token: string) => {
-    const accounts = await adminApi.listBankAccounts(token).catch(() => []);
-    setBanks(Array.isArray(accounts) ? accounts : []);
+    try {
+      const accounts = await adminApi.listBankAccounts(token);
+      setBankOwnerOnly(false);
+      setBanks(Array.isArray(accounts) ? accounts : []);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setBankOwnerOnly(true);
+      } else {
+        toast.error(
+          error instanceof ApiError
+            ? error.message
+            : "Failed to load bank accounts",
+        );
+      }
+      setBanks([]);
+    }
   }, []);
 
   const loadQueue = useCallback(async () => {
@@ -157,9 +173,7 @@ export function AdminPaymentsPanel() {
       toast.success("Payment approved — order confirmed");
       await loadQueue();
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Approve failed",
-      );
+      toast.error(error instanceof ApiError ? error.message : "Approve failed");
     }
   }
 
@@ -175,9 +189,7 @@ export function AdminPaymentsPanel() {
       toast.success("Payment rejected — customer can re-upload proof");
       await loadQueue();
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Reject failed",
-      );
+      toast.error(error instanceof ApiError ? error.message : "Reject failed");
     }
   }
 
@@ -244,146 +256,164 @@ export function AdminPaymentsPanel() {
             checkout.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {banks.length === 0 ? (
+        {bankOwnerOnly ? (
+          <CardContent>
             <p className="text-sm text-muted-foreground">
-              No bank accounts yet. Add one below so customers can pay.
+              Only the store owner can view or change the bank account customers
+              pay into.
             </p>
-          ) : (
-            <ul className="divide-y divide-border border border-border">
-              {banks.map((bank) => (
-                <li
-                  key={bank.id}
-                  className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 text-sm"
-                >
-                  <div>
-                    <p className="font-medium">
-                      {bank.accountName}{" "}
-                      {bank.isActive ? (
-                        <Badge className="ml-2">Active</Badge>
-                      ) : (
-                        <Badge variant="outline" className="ml-2">
-                          Inactive
-                        </Badge>
-                      )}
-                    </p>
-                    <p className="mt-1 text-muted-foreground">
-                      {bank.bankName} · {bank.sortCode} · {bank.accountNumber}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setEditingBankId(bank.id);
-                        setBankForm({
-                          bankName: bank.bankName,
-                          accountName: bank.accountName,
-                          sortCode: bank.sortCode,
-                          accountNumber: bank.accountNumber,
-                          iban: bank.iban ?? "",
-                          referenceInstructions: bank.referenceInstructions,
-                          isActive: bank.isActive,
-                        });
-                      }}
+          </CardContent>
+        ) : (
+          <>
+            <CardContent className="space-y-4">
+              {banks.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No bank accounts yet. Add one below so customers can pay.
+                </p>
+              ) : (
+                <ul className="divide-y divide-border border border-border">
+                  {banks.map((bank) => (
+                    <li
+                      key={bank.id}
+                      className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 text-sm"
                     >
-                      Edit
-                    </Button>
-                    {!bank.isActive ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={async () => {
-                          const token = tokenStore.getAccessToken();
-                          if (!token) return;
-                          await adminApi.activateBankAccount(token, bank.id);
-                          toast.success("Bank account activated");
-                          await loadBanks(token);
-                        }}
-                      >
-                        Activate
-                      </Button>
-                    ) : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+                      <div>
+                        <p className="font-medium">
+                          {bank.accountName}{" "}
+                          {bank.isActive ? (
+                            <Badge className="ml-2">Active</Badge>
+                          ) : (
+                            <Badge variant="outline" className="ml-2">
+                              Inactive
+                            </Badge>
+                          )}
+                        </p>
+                        <p className="mt-1 text-muted-foreground">
+                          {bank.bankName} · {bank.sortCode} ·{" "}
+                          {bank.accountNumber}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setEditingBankId(bank.id);
+                            setBankForm({
+                              bankName: bank.bankName,
+                              accountName: bank.accountName,
+                              sortCode: bank.sortCode,
+                              accountNumber: bank.accountNumber,
+                              iban: bank.iban ?? "",
+                              referenceInstructions: bank.referenceInstructions,
+                              isActive: bank.isActive,
+                            });
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        {!bank.isActive ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={async () => {
+                              const token = tokenStore.getAccessToken();
+                              if (!token) return;
+                              await adminApi.activateBankAccount(
+                                token,
+                                bank.id,
+                              );
+                              toast.success("Bank account activated");
+                              await loadBanks(token);
+                            }}
+                          >
+                            Activate
+                          </Button>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-          <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
-            <h3 className="text-sm font-medium sm:col-span-2">
-              {editingBankId ? "Edit bank account" : "Add bank account"}
-            </h3>
-            {(
-              [
-                ["bankName", "Bank name"],
-                ["accountName", "Account name"],
-                ["sortCode", "Sort code"],
-                ["accountNumber", "Account number"],
-                ["iban", "IBAN (optional)"],
-              ] as const
-            ).map(([key, label]) => (
-              <div key={key} className="space-y-2">
-                <Label>{label}</Label>
-                <Input
-                  value={bankForm[key]}
-                  onChange={(e) =>
-                    setBankForm((prev) => ({ ...prev, [key]: e.target.value }))
-                  }
-                />
+              <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
+                <h3 className="text-sm font-medium sm:col-span-2">
+                  {editingBankId ? "Edit bank account" : "Add bank account"}
+                </h3>
+                {(
+                  [
+                    ["bankName", "Bank name"],
+                    ["accountName", "Account name"],
+                    ["sortCode", "Sort code"],
+                    ["accountNumber", "Account number"],
+                    ["iban", "IBAN (optional)"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <div key={key} className="space-y-2">
+                    <Label>{label}</Label>
+                    <Input
+                      value={bankForm[key]}
+                      onChange={(e) =>
+                        setBankForm((prev) => ({
+                          ...prev,
+                          [key]: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                ))}
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Reference instructions</Label>
+                  <Textarea
+                    rows={2}
+                    value={bankForm.referenceInstructions}
+                    onChange={(e) =>
+                      setBankForm((prev) => ({
+                        ...prev,
+                        referenceInstructions: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="flex items-center gap-2 sm:col-span-2">
+                  <Switch
+                    checked={bankForm.isActive}
+                    onCheckedChange={(checked) =>
+                      setBankForm((prev) => ({ ...prev, isActive: checked }))
+                    }
+                  />
+                  <Label>Set as active account for checkout</Label>
+                </div>
               </div>
-            ))}
-            <div className="space-y-2 sm:col-span-2">
-              <Label>Reference instructions</Label>
-              <Textarea
-                rows={2}
-                value={bankForm.referenceInstructions}
-                onChange={(e) =>
-                  setBankForm((prev) => ({
-                    ...prev,
-                    referenceInstructions: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="flex items-center gap-2 sm:col-span-2">
-              <Switch
-                checked={bankForm.isActive}
-                onCheckedChange={(checked) =>
-                  setBankForm((prev) => ({ ...prev, isActive: checked }))
-                }
-              />
-              <Label>Set as active account for checkout</Label>
-            </div>
-          </div>
-        </CardContent>
-        <CardFooter className="gap-2">
-          <Button
-            type="button"
-            disabled={savingBank}
-            onClick={() => void saveBank()}
-          >
-            {savingBank
-              ? "Saving…"
-              : editingBankId
-                ? "Update bank details"
-                : "Save bank details"}
-          </Button>
-          {editingBankId ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setEditingBankId(null);
-                setBankForm(emptyBank);
-              }}
-            >
-              Cancel
-            </Button>
-          ) : null}
-        </CardFooter>
+            </CardContent>
+            <CardFooter className="gap-2">
+              <Button
+                type="button"
+                disabled={savingBank}
+                onClick={() => void saveBank()}
+              >
+                {savingBank
+                  ? "Saving…"
+                  : editingBankId
+                    ? "Update bank details"
+                    : "Save bank details"}
+              </Button>
+              {editingBankId ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setEditingBankId(null);
+                    setBankForm(emptyBank);
+                  }}
+                >
+                  Cancel
+                </Button>
+              ) : null}
+            </CardFooter>
+          </>
+        )}
       </Card>
 
       <div className="space-y-4">
@@ -556,8 +586,7 @@ export function AdminPaymentsPanel() {
                               ) : null}
                               {proof.amountClaimedPence != null ? (
                                 <p>
-                                  Claimed{" "}
-                                  {formatGbp(proof.amountClaimedPence)}
+                                  Claimed {formatGbp(proof.amountClaimedPence)}
                                 </p>
                               ) : null}
                               <p>

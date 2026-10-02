@@ -3,6 +3,7 @@ export type EnvVars = {
   API_PREFIX?: string;
   CORS_ORIGINS?: string;
   CART_TOKEN_SECRET?: string;
+  CRON_SECRET?: string;
   IDEMPOTENCY_TTL_HOURS?: string;
   MAX_UPLOAD_BYTES?: string;
   DEFAULT_CURRENCY?: string;
@@ -51,6 +52,19 @@ export function validateEnv(config: Record<string, unknown>): EnvVars {
     throw new Error(
       'Missing Supabase secret key: set SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY)',
     );
+  }
+
+  // The cart secret signs guest cart tokens and order view links; the
+  // built-in fallback is public, so production must set its own.
+  const isProduction =
+    config.NODE_ENV === 'production' || config.VERCEL === '1';
+  if (isProduction) {
+    const secret = config.CART_TOKEN_SECRET;
+    if (typeof secret !== 'string' || secret.length < 32) {
+      throw new Error(
+        'CART_TOKEN_SECRET must be set to a random string of at least 32 characters in production',
+      );
+    }
   }
 
   return config as EnvVars;

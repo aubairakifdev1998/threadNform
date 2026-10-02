@@ -20,6 +20,7 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
+    "test:integration": "tsc -p tsconfig.build.json --incremental false && vitest run --config ./vitest.config.integration.ts",
     "db:migrate": "node scripts/run-migrations.mjs",
     "db:verify": "node scripts/verify-schema.mjs",
     "db:seed:catalogue": "node scripts/seed-catalogue.mjs",

@@ -39,7 +39,12 @@ const NEXT: Record<string, string[]> = {
   CONFIRMED: ["PROCESSING", "CANCELLED"],
   PROCESSING: ["PACKED", "CANCELLED"],
   PACKED: ["SHIPPED", "CANCELLED"],
-  SHIPPED: ["DELIVERED"],
+  // Per-item shipments and refunds live in the order review sheet.
+  PARTIALLY_SHIPPED: ["SHIPPED"],
+  SHIPPED: ["DELIVERED", "RETURN_REQUESTED"],
+  DELIVERED: ["RETURN_REQUESTED"],
+  RETURN_REQUESTED: ["RETURNED", "DELIVERED"],
+  RETURNED: ["REFUNDED"],
 };
 
 export function AdminOrdersPanel() {
@@ -90,8 +95,7 @@ export function AdminOrdersPanel() {
 
     if (status === "SHIPPED") {
       carrier = window.prompt("Carrier (optional)", "Royal Mail") || undefined;
-      trackingNumber =
-        window.prompt("Tracking number (optional)") || undefined;
+      trackingNumber = window.prompt("Tracking number (optional)") || undefined;
       trackingUrl = window.prompt("Tracking URL (optional)") || undefined;
     }
 
@@ -132,9 +136,7 @@ export function AdminOrdersPanel() {
       toast.success("Order and payment history deleted");
       await load();
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Delete failed",
-      );
+      toast.error(error instanceof ApiError ? error.message : "Delete failed");
     }
   }
 

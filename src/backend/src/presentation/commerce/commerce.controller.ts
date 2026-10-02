@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Put,
@@ -12,10 +13,41 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomUUID } from 'node:crypto';
-import { IsArray, IsBoolean, IsEmail, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Min, MinLength, ValidateNested } from 'class-validator';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  IsUrl,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
 import { Transform, Type } from 'class-transformer';
+import {
+  MAX_CART_LINE_QUANTITY,
+  assertCartAccess,
+  cartTokenSecret,
+  hashGuestToken,
+} from '../../application/use-cases/carts/cart-access.js';
 import { CheckoutUseCase } from '../../application/use-cases/checkout/checkout.use-case.js';
+import { ReleaseExpiredHoldsUseCase } from '../../application/use-cases/inventory/release-expired-holds.use-case.js';
+import { CustomerNotifier } from '../../application/use-cases/notifications/customer-notifier.js';
+import {
+  CreateRefundUseCase,
+  CreateShipmentUseCase,
+} from '../../application/use-cases/orders/fulfilment.use-cases.js';
 import { PurgeCustomerUseCase } from '../../application/use-cases/customers/purge-customer.use-case.js';
 import {
   ApprovePaymentUseCase,
@@ -26,7 +58,10 @@ import {
 import { SubmitPaymentProofUseCase } from '../../application/use-cases/payments/submit-payment-proof.use-case.js';
 import { GetFileUrlUseCase } from '../../application/use-cases/storage/get-file-url.use-case.js';
 import { Permission } from '../../domain/auth/permissions.js';
-import { OrderStatus } from '../../domain/orders/order-status.js';
+import {
+  OrderStatus,
+  isCancellable,
+} from '../../domain/orders/order-status.js';
 import { Inject } from '@nestjs/common';
 import {
   CATALOG_REPOSITORY,
@@ -52,8 +87,21 @@ import {
   PLATFORM_SETTINGS_REPOSITORY,
   type PlatformSettingsRepository,
 } from '../../domain/repositories/platform-settings.repository.js';
-import { normalizePagination, paginated } from '../../domain/shared/pagination.js';
+import {
+  RATE_LIMITER,
+  type RateLimiter,
+} from '../../domain/repositories/rate-limiter.js';
+import {
+  UNIT_OF_WORK,
+  type UnitOfWork,
+} from '../../domain/repositories/unit-of-work.js';
+import {
+  normalizePagination,
+  paginated,
+} from '../../domain/shared/pagination.js';
+import { effectiveUnitGrossPence } from '../../domain/shared/vat.js';
 import { RequirePermissions } from '../common/decorators/permissions.decorator.js';
+import { RateLimit } from '../common/rate-limit/rate-limit.decorator.js';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto.js';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard.js';
 import { PermissionsGuard } from '../common/guards/permissions.guard.js';
@@ -62,7 +110,12 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import type { User } from '../../domain/entities/user.entity.js';
 import type { AdminAuthenticatedRequest } from '../common/guards/admin-auth.guard.js';
 import { Req } from '@nestjs/common';
-import { ValidationException, ConflictException } from '../../domain/exceptions/domain.exception.js';
+import {
+  ConflictException,
+  DomainException,
+  NotFoundException,
+  ValidationException,
+} from '../../domain/exceptions/domain.exception.js';
 import {
   assertSafeStoragePath,
   createOrderViewToken,
@@ -72,29 +125,103 @@ import { GetCurrentUserUseCase } from '../../application/use-cases/auth/get-curr
 import type { AuthenticatedRequest } from '../auth/guards/supabase-auth.guard.js';
 
 class UkAddressDto {
-  @IsString() fullName!: string;
-  @IsString() line1!: string;
-  @IsOptional() @IsString() line2?: string;
-  @IsString() city!: string;
-  @IsOptional() @IsString() county?: string;
-  @IsString() postcode!: string;
-  @IsOptional() @IsString() country?: string;
-  @IsOptional() @IsString() phone?: string;
+  @IsString() @MaxLength(120) fullName!: string;
+  @IsString() @MaxLength(200) line1!: string;
+  @IsOptional() @IsString() @MaxLength(200) line2?: string;
+  @IsString() @MaxLength(100) city!: string;
+  @IsOptional() @IsString() @MaxLength(100) county?: string;
+  @IsString() @MaxLength(10) postcode!: string;
+  @IsOptional() @IsString() @MaxLength(40) country?: string;
+  @IsOptional() @IsString() @MaxLength(30) phone?: string;
 }
 
 class CheckoutDto {
   @IsUUID() cartId!: string;
   @IsUUID() shippingMethodId!: string;
   @ValidateNested() @Type(() => UkAddressDto) shippingAddress!: UkAddressDto;
-  @IsOptional() @ValidateNested() @Type(() => UkAddressDto) billingAddress?: UkAddressDto;
-  @IsEmail() email!: string;
-  @IsOptional() @IsString() phone?: string;
-  @IsOptional() @IsString() customerNote?: string;
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => UkAddressDto)
+  billingAddress?: UkAddressDto;
+  @IsEmail() @MaxLength(254) email!: string;
+  @IsOptional() @IsString() @MaxLength(30) phone?: string;
+  @IsOptional() @IsString() @MaxLength(500) customerNote?: string;
+  /** Grand total shown to the shopper; mismatch → 409 PRICE_CHANGED. */
+  @IsOptional() @IsInt() @Min(0) expectedTotalPence?: number;
 }
 
 class AddCartItemDto {
   @IsUUID() variantId!: string;
+  @IsInt() @Min(1) @Max(MAX_CART_LINE_QUANTITY) quantity!: number;
+}
+
+class FulfilmentLineDto {
+  @IsUUID() orderItemId!: string;
+  @IsInt() @Min(1) @Max(10_000) quantity!: number;
+}
+
+class CreateShipmentDto {
+  /** Omit to ship everything still outstanding. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => FulfilmentLineDto)
+  items?: FulfilmentLineDto[];
+  @IsOptional() @IsString() @MaxLength(100) carrier?: string;
+  @IsOptional() @IsString() @MaxLength(100) trackingNumber?: string;
+  @IsOptional()
+  @IsUrl({ protocols: ['https', 'http'], require_protocol: true })
+  @MaxLength(500)
+  trackingUrl?: string;
+  @IsOptional() @IsString() @MaxLength(1000) note?: string;
+}
+
+class RefundLineDto extends FulfilmentLineDto {
+  /** Shipped units only: false for damaged goods (default true). */
+  @IsOptional() @IsBoolean() restock?: boolean;
+}
+
+class CreateRefundDto {
+  /** Omit to refund everything not yet refunded. */
+  @IsOptional() @IsInt() @Min(1) amountPence?: number;
+  @IsString() @MinLength(3) @MaxLength(500) reason!: string;
+  @IsOptional() @IsString() @MaxLength(100) reference?: string;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => RefundLineDto)
+  items?: RefundLineDto[];
+}
+
+class MergeCartDto {
+  @IsString() @IsNotEmpty() @MaxLength(100) guestToken!: string;
+}
+
+class CancelOrderDto {
+  @IsString() @MinLength(3) @MaxLength(500) reason!: string;
+}
+
+class CustomerStatusDto {
+  @IsIn(['ACTIVE', 'BLOCKED']) status!: 'ACTIVE' | 'BLOCKED';
+}
+
+class ReturnItemDto {
+  @IsUUID() orderItemId!: string;
   @IsInt() @Min(1) quantity!: number;
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
+}
+
+class ReturnRequestDto {
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
+  @IsOptional() @IsString() @MaxLength(1000) customerNote?: string;
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => ReturnItemDto)
+  items!: ReturnItemDto[];
 }
 
 class ProductListQueryDto extends PaginationQueryDto {
@@ -163,20 +290,34 @@ class UpdateVariantDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) basePricePence?: number;
 }
 
+const MANUAL_MOVEMENT_TYPES = [
+  'MANUAL_ADJUSTMENT',
+  'INITIAL_STOCK',
+  'PURCHASE',
+  'RETURN',
+  'DAMAGE',
+  'LOSS',
+] as const;
+
 class AdjustInventoryDto {
   @IsUUID() warehouseId!: string;
   @IsUUID() variantId!: string;
-  @IsInt() onHandDelta!: number;
-  @IsOptional() @IsString() reason?: string;
-  @IsOptional() @IsString() movementType?: string;
+  @IsInt() @Min(-1_000_000) @Max(1_000_000) onHandDelta!: number;
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
+  @IsOptional() @IsIn(MANUAL_MOVEMENT_TYPES) movementType?: string;
 }
 
 class TransitionOrderDto {
-  @IsString() status!: OrderStatus;
-  @IsOptional() @IsString() note?: string;
-  @IsOptional() @IsString() carrier?: string;
-  @IsOptional() @IsString() trackingNumber?: string;
-  @IsOptional() @IsString() trackingUrl?: string;
+  @IsIn(Object.values(OrderStatus)) status!: OrderStatus;
+  @IsOptional() @IsString() @MaxLength(1000) note?: string;
+  @IsOptional() @IsString() @MaxLength(100) carrier?: string;
+  @IsOptional() @IsString() @MaxLength(100) trackingNumber?: string;
+  @IsOptional()
+  @IsUrl({ protocols: ['https', 'http'], require_protocol: true })
+  @MaxLength(500)
+  trackingUrl?: string;
+  /** RETURNED only — put returned units back into stock (default true). */
+  @IsOptional() @IsBoolean() restock?: boolean;
 }
 
 class OrderLookupDto {
@@ -196,26 +337,41 @@ class RejectPaymentDto {
 }
 
 class PaymentProofMetaDto {
-  @IsString() storagePath!: string;
-  @IsString() mime!: string;
+  @IsString() @MaxLength(500) storagePath!: string;
+  @IsString() @MaxLength(100) mime!: string;
   @IsInt() @Min(1) sizeBytes!: number;
-  @IsOptional() @IsInt() amountClaimedPence?: number;
-  @IsOptional() @IsString() customerReference?: string;
-  @IsOptional() @IsString() customerNote?: string;
+  @IsOptional() @IsInt() @Min(0) amountClaimedPence?: number;
+  @IsOptional() @IsString() @MaxLength(100) customerReference?: string;
+  @IsOptional() @IsString() @MaxLength(1000) customerNote?: string;
 }
 
 class UpdateCartItemDto {
-  @Type(() => Number) @IsInt() @Min(1) quantity!: number;
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(MAX_CART_LINE_QUANTITY)
+  quantity!: number;
 }
 
 class UpsertBankAccountDto {
   @IsOptional() @IsUUID() id?: string;
-  @IsString() bankName!: string;
-  @IsString() accountName!: string;
-  @IsString() sortCode!: string;
-  @IsString() accountNumber!: string;
-  @IsOptional() @IsString() iban?: string | null;
-  @IsOptional() @IsString() referenceInstructions?: string;
+  @IsString() @IsNotEmpty() @MaxLength(100) bankName!: string;
+  @IsString() @IsNotEmpty() @MaxLength(100) accountName!: string;
+  @Matches(/^\d{2}-?\d{2}-?\d{2}$/, {
+    message: 'sortCode must be 6 digits, e.g. 12-34-56',
+  })
+  sortCode!: string;
+  @Matches(/^\d{8}$/, { message: 'accountNumber must be 8 digits' })
+  accountNumber!: string;
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string'
+      ? value.replace(/\s+/g, '').toUpperCase() || undefined
+      : value,
+  )
+  @Matches(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, { message: 'iban is not valid' })
+  iban?: string | null;
+  @IsOptional() @IsString() @MaxLength(500) referenceInstructions?: string;
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
@@ -236,19 +392,27 @@ export class CommerceController {
     private readonly purgeCustomer: PurgeCustomerUseCase,
     private readonly getFileUrl: GetFileUrlUseCase,
     private readonly getCurrentUser: GetCurrentUserUseCase,
+    private readonly releaseExpiredHolds: ReleaseExpiredHoldsUseCase,
+    private readonly createShipment: CreateShipmentUseCase,
+    private readonly createRefund: CreateRefundUseCase,
+    private readonly notifier: CustomerNotifier,
     private readonly config: ConfigService,
     @Inject(CATALOG_REPOSITORY) private readonly catalog: CatalogRepository,
     @Inject(CART_REPOSITORY) private readonly carts: CartRepository,
     @Inject(COMMERCE_REPOSITORY) private readonly commerce: CommerceRepository,
     @Inject(CUSTOMER_REPOSITORY) private readonly customers: CustomerRepository,
-    @Inject(INVENTORY_REPOSITORY) private readonly inventory: InventoryRepository,
+    @Inject(INVENTORY_REPOSITORY)
+    private readonly inventory: InventoryRepository,
     @Inject(PLATFORM_SETTINGS_REPOSITORY)
     private readonly settings: PlatformSettingsRepository,
+    @Inject(UNIT_OF_WORK) private readonly uow: UnitOfWork,
+    @Inject(RATE_LIMITER) private readonly rateLimiter: RateLimiter,
   ) {}
 
   private proofBucket() {
     return (
-      this.config.get<string>('supabase.paymentProofsBucket') ?? 'payment-proofs'
+      this.config.get<string>('supabase.paymentProofsBucket') ??
+      'payment-proofs'
     );
   }
 
@@ -266,7 +430,11 @@ export class CommerceController {
           );
           return { ...proof, url, isImage: proof.mime.startsWith('image/') };
         } catch {
-          return { ...proof, url: null, isImage: proof.mime.startsWith('image/') };
+          return {
+            ...proof,
+            url: null,
+            isImage: proof.mime.startsWith('image/'),
+          };
         }
       }),
     );
@@ -375,6 +543,7 @@ export class CommerceController {
   }
 
   @Get('checkout/bank-details')
+  @RateLimit({ name: 'bank-details', max: 60, windowSeconds: 300 })
   async checkoutBankDetails(
     @Headers('x-guest-token') guestToken?: string,
     @Query('cartId') cartId?: string,
@@ -401,9 +570,9 @@ export class CommerceController {
       }
       const cart = await this.carts.findById(cartId);
       if (!cart) {
-        throw new ValidationException('Cart not found', 'NOT_FOUND');
+        throw new NotFoundException('Cart', cartId);
       }
-      this.assertGuestCartAccess(cart, guestToken);
+      assertCartAccess(cart, { guestToken }, cartTokenSecret(this.config));
       authorized = true;
     }
 
@@ -433,46 +602,48 @@ export class CommerceController {
 
   // —— Carts ——
   @Post('carts')
+  @RateLimit({ name: 'cart-create', max: 60, windowSeconds: 3600 })
   async createGuestCart() {
     const token = randomUUID();
-    const secret = this.config.get<string>('cartTokenSecret') ?? 'dev';
-    const hash = createHash('sha256').update(`${secret}:${token}`).digest('hex');
-    const cart = await this.carts.createGuestCart(hash);
+    const cart = await this.carts.createGuestCart(
+      hashGuestToken(token, cartTokenSecret(this.config)),
+    );
     return { cartId: cart.id, guestToken: token };
   }
 
-  private assertGuestCartAccess(
-    cart: { customerId: string | null; guestTokenHash: string | null },
-    guestToken?: string,
-  ) {
-    if (cart.customerId) {
-      // Customer carts require auth merge flow — not accessible via guest token.
-      throw new ValidationException('Cart not found', 'NOT_FOUND');
+  /** Loads a cart the caller may use, or throws NOT_FOUND / auth errors. */
+  private async findAccessibleCart(cartId: string, guestToken?: string) {
+    const cart = await this.carts.findById(cartId);
+    if (!cart) throw new NotFoundException('Cart', cartId);
+    assertCartAccess(cart, { guestToken }, cartTokenSecret(this.config));
+    return cart;
+  }
+
+  /** Locks an accessible, ACTIVE cart for the current transaction. */
+  private async lockAccessibleCart(cartId: string, guestToken?: string) {
+    await this.findAccessibleCart(cartId, guestToken);
+    const cart = await this.carts.lockActive(cartId);
+    if (!cart) {
+      throw new ConflictException(
+        'This cart has already been checked out.',
+        'CART_NOT_ACTIVE',
+      );
     }
-    if (!cart.guestTokenHash) {
-      throw new ValidationException('Cart not found', 'NOT_FOUND');
-    }
-    if (!guestToken) {
-      throw new ValidationException('Guest token required', 'GUEST_TOKEN_REQUIRED');
-    }
-    const secret = this.config.get<string>('cartTokenSecret') ?? 'dev';
-    const hash = createHash('sha256')
-      .update(`${secret}:${guestToken}`)
-      .digest('hex');
-    if (hash !== cart.guestTokenHash) {
-      throw new ValidationException('Invalid guest token', 'GUEST_TOKEN_INVALID');
-    }
+    return cart;
   }
 
   @Get('carts/:cartId')
   async getCart(
-    @Param('cartId') cartId: string,
+    @Param('cartId', new ParseUUIDPipe()) cartId: string,
     @Headers('x-guest-token') guestToken?: string,
   ) {
-    const cart = await this.carts.findById(cartId);
-    if (!cart) throw new ValidationException('Cart not found', 'NOT_FOUND');
-    this.assertGuestCartAccess(cart, guestToken);
+    const cart = await this.findAccessibleCart(cartId, guestToken);
+    if (cart.status !== 'ACTIVE') {
+      // Converted/abandoned carts are finished; the client should start a new one.
+      throw new NotFoundException('Cart', cartId);
+    }
     const items = await this.carts.listItems(cartId);
+    const warehouse = await this.inventory.getDefaultWarehouse();
     const enriched = await Promise.all(
       items.map(async (item) => {
         const variant = await this.catalog.getVariantById(item.variantId);
@@ -482,10 +653,25 @@ export class CommerceController {
         const price = variant
           ? await this.catalog.getPriceForVariant(variant.id)
           : null;
-        const unit =
-          price == null
-            ? 0
-            : (price.salePricePence ?? price.basePricePence);
+        const unit = price
+          ? effectiveUnitGrossPence(price.basePricePence, price.salePricePence)
+          : 0;
+        const purchasable = Boolean(
+          variant?.status === 'ACTIVE' && product?.status === 'ACTIVE' && price,
+        );
+        let availableQuantity = 0;
+        if (purchasable && warehouse) {
+          const [stock, held] = await Promise.all([
+            this.inventory.getItem(warehouse.id, item.variantId),
+            this.inventory.getHold({
+              warehouseId: warehouse.id,
+              variantId: item.variantId,
+              referenceType: 'CART',
+              referenceId: cartId,
+            }),
+          ]);
+          availableQuantity = Math.max(0, (stock?.available ?? 0) + held);
+        }
         return {
           id: item.id,
           variantId: item.variantId,
@@ -495,216 +681,250 @@ export class CommerceController {
           sku: variant?.sku ?? null,
           productName: product?.name ?? null,
           productSlug: product?.slug ?? null,
+          purchasable,
+          availableQuantity,
+          inStock: purchasable && availableQuantity >= item.quantity,
         };
       }),
     );
     const subtotalPence = enriched.reduce(
-      (sum, row) => sum + row.lineTotalPence,
+      (sum, row) => sum + (row.purchasable ? row.lineTotalPence : 0),
       0,
     );
-    return { ...cart, items: enriched, subtotalPence };
+    return {
+      id: cart.id,
+      status: cart.status,
+      currency: cart.currency,
+      items: enriched,
+      subtotalPence,
+      hasUnavailableItems: enriched.some((row) => !row.inStock),
+    };
   }
 
   @Post('carts/:cartId/items')
+  @RateLimit({ name: 'cart-write', max: 120, windowSeconds: 60 })
   async addCartItem(
-    @Param('cartId') cartId: string,
+    @Param('cartId', new ParseUUIDPipe()) cartId: string,
     @Body() dto: AddCartItemDto,
     @Headers('x-guest-token') guestToken?: string,
   ) {
-    const cart = await this.carts.findById(cartId);
-    if (!cart) throw new ValidationException('Cart not found', 'NOT_FOUND');
-    this.assertGuestCartAccess(cart, guestToken);
     const variant = await this.catalog.getVariantById(dto.variantId);
-    if (!variant || variant.status !== 'ACTIVE') {
-      throw new ValidationException('Variant unavailable', 'VARIANT_UNAVAILABLE');
+    const product = variant
+      ? await this.catalog.getProductById(variant.productId)
+      : null;
+    if (
+      !variant ||
+      variant.status !== 'ACTIVE' ||
+      product?.status !== 'ACTIVE'
+    ) {
+      throw new ValidationException(
+        'This item is no longer available',
+        'VARIANT_UNAVAILABLE',
+      );
+    }
+    if (!(await this.catalog.getPriceForVariant(variant.id))) {
+      throw new ValidationException(
+        'This item cannot be purchased right now',
+        'VARIANT_UNAVAILABLE',
+      );
     }
 
-    const existing = (await this.carts.listItems(cartId)).find(
-      (i) => i.variantId === dto.variantId,
-    );
-    const previousQty = existing?.quantity ?? 0;
-    const nextQty = previousQty + dto.quantity;
-    await this.assertCartStock(cartId, dto.variantId, nextQty, previousQty);
-    await this.syncCartReservation(cartId, dto.variantId, previousQty, nextQty);
-    try {
-      return await this.carts.upsertItem(cartId, dto.variantId, dto.quantity);
-    } catch (error) {
-      await this.syncCartReservation(cartId, dto.variantId, nextQty, previousQty);
-      throw error;
-    }
+    return this.uow.run(async () => {
+      await this.lockAccessibleCart(cartId, guestToken);
+      const existing = (await this.carts.listItems(cartId)).find(
+        (i) => i.variantId === dto.variantId,
+      );
+      const nextQty = (existing?.quantity ?? 0) + dto.quantity;
+      if (nextQty > MAX_CART_LINE_QUANTITY) {
+        throw new ValidationException(
+          `You can buy at most ${MAX_CART_LINE_QUANTITY} of one item per order.`,
+          'QUANTITY_LIMIT',
+          { max: MAX_CART_LINE_QUANTITY, requested: nextQty },
+        );
+      }
+      await this.applyCartStock(cartId, dto.variantId, nextQty);
+      const item = await this.carts.upsertItem(
+        cartId,
+        dto.variantId,
+        dto.quantity,
+      );
+      await this.carts.touch(cartId);
+      return item;
+    });
   }
 
   @Patch('carts/:cartId/items/:itemId')
+  @RateLimit({ name: 'cart-write', max: 120, windowSeconds: 60 })
   async updateCartItem(
-    @Param('cartId') cartId: string,
-    @Param('itemId') itemId: string,
+    @Param('cartId', new ParseUUIDPipe()) cartId: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
     @Body() dto: UpdateCartItemDto,
     @Headers('x-guest-token') guestToken?: string,
   ) {
-    const cart = await this.carts.findById(cartId);
-    if (!cart) throw new ValidationException('Cart not found', 'NOT_FOUND');
-    this.assertGuestCartAccess(cart, guestToken);
-    const items = await this.carts.listItems(cartId);
-    const existing = items.find((i) => i.id === itemId);
-    if (!existing) throw new ValidationException('Cart item not found', 'NOT_FOUND');
-
-    await this.assertCartStock(
-      cartId,
-      existing.variantId,
-      dto.quantity,
-      existing.quantity,
-    );
-    await this.syncCartReservation(
-      cartId,
-      existing.variantId,
-      existing.quantity,
-      dto.quantity,
-    );
-    try {
-      return await this.carts.updateItemQuantity(itemId, dto.quantity);
-    } catch (error) {
-      await this.syncCartReservation(
-        cartId,
-        existing.variantId,
-        dto.quantity,
-        existing.quantity,
+    return this.uow.run(async () => {
+      await this.lockAccessibleCart(cartId, guestToken);
+      const existing = (await this.carts.listItems(cartId)).find(
+        (i) => i.id === itemId,
       );
-      throw error;
-    }
+      if (!existing) throw new NotFoundException('Cart item', itemId);
+      await this.applyCartStock(cartId, existing.variantId, dto.quantity);
+      const item = await this.carts.updateItemQuantity(itemId, dto.quantity);
+      await this.carts.touch(cartId);
+      return item;
+    });
   }
 
   @Delete('carts/:cartId/items/:itemId')
+  @RateLimit({ name: 'cart-write', max: 120, windowSeconds: 60 })
   async removeCartItem(
-    @Param('cartId') cartId: string,
-    @Param('itemId') itemId: string,
+    @Param('cartId', new ParseUUIDPipe()) cartId: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
     @Headers('x-guest-token') guestToken?: string,
   ) {
-    const cart = await this.carts.findById(cartId);
-    if (!cart) throw new ValidationException('Cart not found', 'NOT_FOUND');
-    this.assertGuestCartAccess(cart, guestToken);
-    const items = await this.carts.listItems(cartId);
-    const existing = items.find((i) => i.id === itemId);
-    if (!existing) throw new ValidationException('Cart item not found', 'NOT_FOUND');
-    await this.syncCartReservation(
-      cartId,
-      existing.variantId,
-      existing.quantity,
-      0,
-    );
-    try {
-      await this.carts.removeItem(itemId);
-    } catch (error) {
-      await this.syncCartReservation(
-        cartId,
-        existing.variantId,
-        0,
-        existing.quantity,
+    return this.uow.run(async () => {
+      await this.lockAccessibleCart(cartId, guestToken);
+      const existing = (await this.carts.listItems(cartId)).find(
+        (i) => i.id === itemId,
       );
-      throw error;
-    }
-    return { deleted: true };
+      if (!existing) throw new NotFoundException('Cart item', itemId);
+      await this.applyCartStock(cartId, existing.variantId, 0);
+      await this.carts.removeItem(itemId);
+      await this.carts.touch(cartId);
+      return { deleted: true };
+    });
   }
 
-  private async assertCartStock(
+  /**
+   * Validates and (when reserve-on-cart is on) holds stock so this cart has
+   * exactly `quantity` units of the variant. Runs inside the cart's lock.
+   */
+  private async applyCartStock(
     cartId: string,
     variantId: string,
-    nextQty: number,
-    previousQty: number,
+    quantity: number,
   ) {
     const policy = await this.settings.getInventoryPolicy();
-    if (policy.allowOversell) return;
-
     const warehouse = await this.inventory.getDefaultWarehouse();
     if (!warehouse) {
-      throw new ValidationException('No default warehouse configured');
-    }
-    const stock = await this.inventory.getItem(warehouse.id, variantId);
-    // If we already hold a cart reservation for previousQty, available excludes it —
-    // so effective room = available + previousQty when reserveOnCart is on.
-    const available = stock?.available ?? 0;
-    const room = policy.reserveOnCart ? available + previousQty : available;
-    if (nextQty > room) {
       throw new ConflictException(
-        `Only ${room} units available for this item.`,
-        'INSUFFICIENT_STOCK',
-        { variantId, available: room, requested: nextQty, cartId },
+        'The shop cannot take orders right now. Please try again later.',
+        'WAREHOUSE_NOT_CONFIGURED',
       );
+    }
+
+    if (policy.reserveOnCart) {
+      let target = quantity;
+      if (policy.allowOversell && quantity > 0) {
+        // Hold what is free; the rest is accepted as oversold demand.
+        const [stock, held] = await Promise.all([
+          this.inventory.getItem(warehouse.id, variantId),
+          this.inventory.getHold({
+            warehouseId: warehouse.id,
+            variantId,
+            referenceType: 'CART',
+            referenceId: cartId,
+          }),
+        ]);
+        target = Math.min(
+          quantity,
+          Math.max(0, (stock?.available ?? 0) + held),
+        );
+      }
+      try {
+        await this.inventory.setHold({
+          warehouseId: warehouse.id,
+          variantId,
+          quantity: target,
+          referenceType: 'CART',
+          referenceId: cartId,
+          actorType: 'SYSTEM',
+          reason: 'Cart quantity changed',
+        });
+      } catch (error) {
+        if (
+          error instanceof DomainException &&
+          error.code === 'INSUFFICIENT_STOCK'
+        ) {
+          throw this.cartStockError(
+            variantId,
+            Number(error.details.available ?? 0),
+            quantity,
+          );
+        }
+        throw error;
+      }
+      return;
+    }
+
+    if (policy.allowOversell || quantity === 0) return;
+    const stock = await this.inventory.getItem(warehouse.id, variantId);
+    const available = stock?.available ?? 0;
+    if (quantity > available) {
+      throw this.cartStockError(variantId, available, quantity);
     }
   }
 
-  private async syncCartReservation(
-    cartId: string,
+  private cartStockError(
     variantId: string,
-    previousQty: number,
-    nextQty: number,
+    available: number,
+    requested: number,
   ) {
-    const policy = await this.settings.getInventoryPolicy();
-    if (!policy.reserveOnCart) return;
-    const warehouse = await this.inventory.getDefaultWarehouse();
-    if (!warehouse) return;
-    const delta = nextQty - previousQty;
-    if (delta === 0) return;
-    try {
-      if (delta > 0) {
-        await this.inventory.reserve({
-          warehouseId: warehouse.id,
-          variantId,
-          qty: delta,
-          referenceType: 'CART',
-          referenceId: cartId,
-          actorType: 'SYSTEM',
-        });
-      } else {
-        await this.inventory.release({
-          warehouseId: warehouse.id,
-          variantId,
-          qty: Math.abs(delta),
-          referenceType: 'CART',
-          referenceId: cartId,
-          actorType: 'SYSTEM',
-          reason: 'Cart quantity decreased',
-        });
-      }
-    } catch (error) {
-      throw new ConflictException(
-        error instanceof Error
-          ? error.message
-          : 'Could not update inventory hold for cart',
-        'CART_INVENTORY_SYNC_FAILED',
-        { cartId, variantId, previousQty, nextQty },
-      );
-    }
+    return new ConflictException(
+      available > 0
+        ? `Only ${available} available for this item.`
+        : 'This item is out of stock.',
+      'INSUFFICIENT_STOCK',
+      { variantId, available, requested },
+    );
   }
 
   @Post('carts/merge')
+  @RateLimit({ name: 'cart-write', max: 120, windowSeconds: 60 })
   @UseGuards(SupabaseAuthGuard)
-  async mergeCart(
-    @CurrentUser() user: User,
-    @Body() body: { guestToken: string },
-  ) {
+  async mergeCart(@CurrentUser() user: User, @Body() body: MergeCartDto) {
     await this.customers.ensureFromAuth({
       id: user.id,
       email: user.email,
       fullName: user.fullName,
     });
-    let customerCart = await this.carts.findActiveByCustomer(user.id);
-    if (!customerCart) {
-      customerCart = await this.carts.createCustomerCart(user.id);
-    }
-    const secret = this.config.get<string>('cartTokenSecret') ?? 'dev';
-    const hash = createHash('sha256')
-      .update(`${secret}:${body.guestToken}`)
-      .digest('hex');
-    const guestCart = await this.carts.findByGuestTokenHash(hash);
-    if (guestCart) {
-      await this.carts.mergeCarts(guestCart.id, customerCart.id);
-    }
-    const items = await this.carts.listItems(customerCart.id);
-    return { ...customerCart, items };
+    return this.uow.run(async () => {
+      let customerCart = await this.carts.findActiveByCustomer(user.id);
+      if (!customerCart) {
+        customerCart = await this.carts.createCustomerCart(user.id);
+      }
+      await this.carts.lockActive(customerCart.id);
+      const guestCart = await this.carts.findByGuestTokenHash(
+        hashGuestToken(body.guestToken, cartTokenSecret(this.config)),
+      );
+      if (guestCart && (await this.carts.lockActive(guestCart.id))) {
+        const existing = await this.carts.listItems(customerCart.id);
+        for (const item of await this.carts.listItems(guestCart.id)) {
+          const current =
+            existing.find((e) => e.variantId === item.variantId)?.quantity ?? 0;
+          const target = Math.min(
+            current + item.quantity,
+            MAX_CART_LINE_QUANTITY,
+          );
+          // Move the stock hold with the line: release guest, hold for customer.
+          await this.applyCartStock(guestCart.id, item.variantId, 0);
+          await this.applyCartStock(customerCart.id, item.variantId, target);
+          await this.carts.upsertItem(
+            customerCart.id,
+            item.variantId,
+            target - current,
+          );
+        }
+        await this.carts.markAbandoned(guestCart.id);
+        await this.carts.touch(customerCart.id);
+      }
+      const items = await this.carts.listItems(customerCart.id);
+      return { ...customerCart, items };
+    });
   }
 
   // —— Checkout ——
   @Post('checkout')
+  @RateLimit({ name: 'checkout', max: 20, windowSeconds: 600 })
   async placeOrder(
     @Body() dto: CheckoutDto,
     @Headers('idempotency-key') idempotencyKey?: string,
@@ -725,6 +945,7 @@ export class CommerceController {
   }
 
   @Post('checkout/authenticated')
+  @RateLimit({ name: 'checkout', max: 20, windowSeconds: 600 })
   @UseGuards(SupabaseAuthGuard)
   async placeOrderAuthenticated(
     @CurrentUser() user: User,
@@ -756,7 +977,10 @@ export class CommerceController {
   // —— Customer orders ——
   @Get('orders')
   @UseGuards(SupabaseAuthGuard)
-  async myOrders(@CurrentUser() user: User, @Query() query: PaginationQueryDto) {
+  async myOrders(
+    @CurrentUser() user: User,
+    @Query() query: PaginationQueryDto,
+  ) {
     const page = normalizePagination(query.page, query.pageSize);
     const result = await this.commerce.listOrders({
       ...page,
@@ -767,6 +991,15 @@ export class CommerceController {
   }
 
   @Post('orders/lookup')
+  @RateLimit(
+    { name: 'order-lookup', max: 10, windowSeconds: 600 },
+    {
+      name: 'order-lookup-number',
+      max: 5,
+      windowSeconds: 600,
+      by: 'body:orderNumber',
+    },
+  )
   async lookupOrder(@Body() dto: OrderLookupDto) {
     const order = await this.commerce.getOrderByNumber(dto.orderNumber.trim());
     if (!order) {
@@ -791,6 +1024,7 @@ export class CommerceController {
   }
 
   @Get('orders/:orderNumber')
+  @RateLimit({ name: 'order-view', max: 120, windowSeconds: 300 })
   async getOrder(
     @Param('orderNumber') orderNumber: string,
     @Query('email') email: string | undefined,
@@ -812,8 +1046,7 @@ export class CommerceController {
 
     const isOwner = Boolean(user && order.customerId === user.id);
     const signedInEmailMatch = Boolean(
-      user &&
-        user.email.trim().toLowerCase() === order.email.toLowerCase(),
+      user && user.email.trim().toLowerCase() === order.email.toLowerCase(),
     );
     const emailMatch =
       Boolean(email) &&
@@ -846,9 +1079,15 @@ export class CommerceController {
           await this.commerce.listPaymentProofs(payment.id),
         )
       : [];
+    const [shipments, refunds] = await Promise.all([
+      this.commerce.listShipments(order.id),
+      this.commerce.listRefunds(order.id),
+    ]);
     return {
       ...order,
       items,
+      shipments,
+      refunds,
       payment: payment
         ? {
             id: payment.id,
@@ -863,40 +1102,19 @@ export class CommerceController {
   }
 
   @Post('orders/:orderNumber/payment-proofs')
+  @RateLimit({ name: 'proof-submit', max: 20, windowSeconds: 600 })
   @UseGuards(SupabaseAuthGuard)
   async uploadProof(
     @Param('orderNumber') orderNumber: string,
     @Body() dto: PaymentProofMetaDto,
     @CurrentUser() user: User,
   ) {
-    const order = await this.commerce.getOrderByNumber(orderNumber);
-    if (!order) throw new ValidationException('Order not found', 'NOT_FOUND');
-
-    if (order.customerId && order.customerId !== user.id) {
-      throw new ValidationException(
-        'You can only upload proof for your own orders',
-        'FORBIDDEN',
-      );
-    }
-
-    // Guest orders: only the email owner may claim + upload
-    if (
-      !order.customerId &&
-      user.email.trim().toLowerCase() !== order.email.toLowerCase()
-    ) {
-      throw new ValidationException(
-        'Sign in with the email used at checkout to upload proof',
-        'FORBIDDEN',
-      );
-    }
-
-    if (['VERIFIED', 'REFUNDED'].includes(order.paymentStatus)) {
-      throw new ValidationException(
-        'Payment is already verified for this order',
-        'PAYMENT_ALREADY_VERIFIED',
-      );
-    }
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    const allowed = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'application/pdf',
+    ];
     if (!allowed.includes(dto.mime)) {
       throw new ValidationException(
         'Unsupported media type',
@@ -912,8 +1130,10 @@ export class CommerceController {
       `orders/${orderNumber}/`,
     );
     return this.submitProof.execute({
+      bucket: this.proofBucket(),
       orderNumber,
       customerId: user.id,
+      customerEmail: user.email,
       storagePath,
       mime: dto.mime,
       sizeBytes: dto.sizeBytes,
@@ -946,118 +1166,118 @@ export class CommerceController {
       departmentId = departmentId ?? category.departmentId;
     }
 
-    const product = await this.catalog.createProduct({
-      name: dto.name,
-      slug: dto.slug,
-      description: dto.description,
-      productType,
-      departmentId,
-      categoryId: dto.categoryId,
-      brandId: dto.brandId,
-      status: 'DRAFT',
-    });
+    return this.uow.run(async () => {
+      const product = await this.catalog.createProduct({
+        name: dto.name,
+        slug: dto.slug,
+        description: dto.description,
+        productType,
+        departmentId,
+        categoryId: dto.categoryId,
+        brandId: dto.brandId,
+        status: 'DRAFT',
+      });
 
-    const vat = await this.catalog.getDefaultVatRate();
-    if (!vat) throw new ValidationException('Default VAT rate missing');
+      const vat = await this.catalog.getDefaultVatRate();
+      if (!vat) throw new ValidationException('Default VAT rate missing');
 
-    const warehouse = await this.inventory.getDefaultWarehouse();
-    const initialStock = dto.initialStock ?? 0;
-    const slugPart = dto.slug.toUpperCase().replace(/[^A-Z0-9]+/g, '-');
+      const warehouse = await this.inventory.getDefaultWarehouse();
+      const initialStock = dto.initialStock ?? 0;
+      const slugPart = dto.slug.toUpperCase().replace(/[^A-Z0-9]+/g, '-');
 
-    const sizes =
-      sizeIds.length > 0
-        ? (await this.catalog.listAllSizeValues()).filter((s) =>
-            sizeIds.includes(s.id),
-          )
-        : [];
-    const colors =
-      colorIds.length > 0
-        ? (await this.catalog.listColors()).filter((c) => colorIds.includes(c.id))
-        : [];
+      const sizes =
+        sizeIds.length > 0
+          ? (await this.catalog.listAllSizeValues()).filter((s) =>
+              sizeIds.includes(s.id),
+            )
+          : [];
+      const colors =
+        colorIds.length > 0
+          ? (await this.catalog.listColors()).filter((c) =>
+              colorIds.includes(c.id),
+            )
+          : [];
 
-    type Combo = {
-      size?: { id: string; code: string };
-      color?: { id: string; name: string };
-    };
-    const combos: Combo[] = [];
-    if (hasOptions) {
-      const sizeList = sizes.length > 0 ? sizes : [undefined];
-      const colorList = colors.length > 0 ? colors : [undefined];
-      for (const size of sizeList) {
-        for (const color of colorList) {
-          combos.push({
-            size: size
-              ? { id: size.id, code: size.code }
-              : undefined,
-            color: color
-              ? { id: color.id, name: color.name }
-              : undefined,
+      type Combo = {
+        size?: { id: string; code: string };
+        color?: { id: string; name: string };
+      };
+      const combos: Combo[] = [];
+      if (hasOptions) {
+        const sizeList = sizes.length > 0 ? sizes : [undefined];
+        const colorList = colors.length > 0 ? colors : [undefined];
+        for (const size of sizeList) {
+          for (const color of colorList) {
+            combos.push({
+              size: size ? { id: size.id, code: size.code } : undefined,
+              color: color ? { id: color.id, name: color.name } : undefined,
+            });
+          }
+        }
+      } else {
+        combos.push({});
+      }
+
+      let isFirst = true;
+      for (const combo of combos) {
+        const skuParts = [slugPart];
+        if (combo.size) skuParts.push(combo.size.code.toUpperCase());
+        if (combo.color) {
+          skuParts.push(
+            combo.color.name
+              .toUpperCase()
+              .replace(/[^A-Z0-9]+/g, '')
+              .slice(0, 12),
+          );
+        }
+        if (!combo.size && !combo.color) {
+          skuParts.push(dto.sku?.trim() || 'DEFAULT');
+        }
+        const sku = skuParts.join('-');
+        const fingerprint = [
+          combo.size?.id ?? 'nosize',
+          combo.color?.id ?? 'nocolor',
+        ].join(':');
+
+        const variant = await this.catalog.createVariant({
+          productId: product.id,
+          sku,
+          optionFingerprint: hasOptions ? fingerprint : 'default',
+          isDefault: isFirst,
+        });
+        isFirst = false;
+
+        if (combo.size || combo.color) {
+          await this.catalog.attachVariantOptions({
+            variantId: variant.id,
+            sizeValueId: combo.size?.id ?? null,
+            colorId: combo.color?.id ?? null,
+          });
+        }
+
+        if (dto.basePricePence != null) {
+          await this.catalog.upsertPrice({
+            productId: product.id,
+            variantId: variant.id,
+            basePricePence: dto.basePricePence,
+            vatRateId: vat.id,
+          });
+        }
+
+        if (warehouse && initialStock > 0) {
+          await this.inventory.adjust({
+            warehouseId: warehouse.id,
+            variantId: variant.id,
+            onHandDelta: initialStock,
+            movementType: 'MANUAL_ADJUSTMENT',
+            actorType: 'ADMIN',
+            reason: 'Initial stock on product create',
           });
         }
       }
-    } else {
-      combos.push({});
-    }
 
-    let isFirst = true;
-    for (const combo of combos) {
-      const skuParts = [slugPart];
-      if (combo.size) skuParts.push(combo.size.code.toUpperCase());
-      if (combo.color) {
-        skuParts.push(
-          combo.color.name
-            .toUpperCase()
-            .replace(/[^A-Z0-9]+/g, '')
-            .slice(0, 12),
-        );
-      }
-      if (!combo.size && !combo.color) {
-        skuParts.push(dto.sku?.trim() || 'DEFAULT');
-      }
-      const sku = skuParts.join('-');
-      const fingerprint = [
-        combo.size?.id ?? 'nosize',
-        combo.color?.id ?? 'nocolor',
-      ].join(':');
-
-      const variant = await this.catalog.createVariant({
-        productId: product.id,
-        sku,
-        optionFingerprint: hasOptions ? fingerprint : 'default',
-        isDefault: isFirst,
-      });
-      isFirst = false;
-
-      if (combo.size || combo.color) {
-        await this.catalog.attachVariantOptions({
-          variantId: variant.id,
-          sizeValueId: combo.size?.id ?? null,
-          colorId: combo.color?.id ?? null,
-        });
-      }
-
-      if (dto.basePricePence != null) {
-        await this.catalog.upsertPrice({
-          productId: product.id,
-          variantId: variant.id,
-          basePricePence: dto.basePricePence,
-          vatRateId: vat.id,
-        });
-      }
-
-      if (warehouse && initialStock > 0) {
-        await this.inventory.adjust({
-          warehouseId: warehouse.id,
-          variantId: variant.id,
-          onHandDelta: initialStock,
-          movementType: 'MANUAL_ADJUSTMENT',
-          actorType: 'ADMIN',
-          reason: 'Initial stock on product create',
-        });
-      }
-    }
-
-    return this.catalog.updateProduct(product.id, { status: 'ACTIVE' });
+      return this.catalog.updateProduct(product.id, { status: 'ACTIVE' });
+    });
   }
 
   @Post('admin/products/:productId/variants')
@@ -1077,96 +1297,87 @@ export class CommerceController {
       throw new ValidationException('SKU is required');
     }
 
-    const existingSku = await this.catalog.getVariantBySku(sku);
-    if (existingSku) {
-      throw new ValidationException(
-        `SKU "${sku}" already exists`,
-        'DUPLICATE_SKU',
+    return this.uow.run(async () => {
+      const existingSku = await this.catalog.getVariantBySku(sku);
+      if (existingSku) {
+        throw new ValidationException(
+          `SKU "${sku}" already exists`,
+          'DUPLICATE_SKU',
+        );
+      }
+
+      const hasOptions = Boolean(dto.sizeValueId || dto.colorId);
+      const fingerprint =
+        dto.optionFingerprint?.trim() ||
+        (hasOptions
+          ? `${dto.sizeValueId ?? 'nosize'}:${dto.colorId ?? 'nocolor'}`
+          : `sku:${sku}`);
+
+      const existingVariants = await this.catalog.listVariants(productId);
+      const duplicateOption = existingVariants.find(
+        (v) => v.status !== 'ARCHIVED' && v.optionFingerprint === fingerprint,
       );
-    }
+      if (duplicateOption) {
+        throw new ValidationException(
+          `A variant with this size/color already exists (${duplicateOption.sku})`,
+          'DUPLICATE_OPTION',
+        );
+      }
 
-    const hasOptions = Boolean(dto.sizeValueId || dto.colorId);
-    const fingerprint =
-      dto.optionFingerprint?.trim() ||
-      (hasOptions
-        ? `${dto.sizeValueId ?? 'nosize'}:${dto.colorId ?? 'nocolor'}`
-        : `sku:${sku}`);
+      if (hasOptions && product.productType !== 'VARIABLE') {
+        await this.catalog.updateProduct(productId, {
+          productType: 'VARIABLE',
+        });
+      }
 
-    const existingVariants = await this.catalog.listVariants(productId);
-    const duplicateOption = existingVariants.find(
-      (v) =>
-        v.status !== 'ARCHIVED' && v.optionFingerprint === fingerprint,
-    );
-    if (duplicateOption) {
-      throw new ValidationException(
-        `A variant with this size/color already exists (${duplicateOption.sku})`,
-        'DUPLICATE_OPTION',
-      );
-    }
-
-    if (hasOptions && product.productType !== 'VARIABLE') {
-      await this.catalog.updateProduct(productId, { productType: 'VARIABLE' });
-    }
-
-    let variant;
-    try {
-      variant = await this.catalog.createVariant({
+      // Unique violations (concurrent create) surface as 409 DUPLICATE.
+      const variant = await this.catalog.createVariant({
         productId,
         sku,
         optionFingerprint: fingerprint,
-        isDefault: existingVariants.filter((v) => v.status !== 'ARCHIVED')
-          .length === 0,
+        isDefault:
+          existingVariants.filter((v) => v.status !== 'ARCHIVED').length === 0,
       });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message.toLowerCase() : '';
-      if (message.includes('unique') || message.includes('duplicate')) {
-        throw new ValidationException(
-          'Variant already exists for this product option or SKU',
-          'DUPLICATE_VARIANT',
-        );
+
+      if (hasOptions) {
+        await this.catalog.attachVariantOptions({
+          variantId: variant.id,
+          sizeValueId: dto.sizeValueId ?? null,
+          colorId: dto.colorId ?? null,
+        });
       }
-      throw error;
-    }
 
-    if (hasOptions) {
-      await this.catalog.attachVariantOptions({
-        variantId: variant.id,
-        sizeValueId: dto.sizeValueId ?? null,
-        colorId: dto.colorId ?? null,
-      });
-    }
+      if (dto.basePricePence != null) {
+        const vat = await this.catalog.getDefaultVatRate();
+        if (!vat) throw new ValidationException('Default VAT rate missing');
+        await this.catalog.upsertPrice({
+          productId,
+          variantId: variant.id,
+          basePricePence: dto.basePricePence,
+          vatRateId: vat.id,
+        });
+      }
 
-    if (dto.basePricePence != null) {
-      const vat = await this.catalog.getDefaultVatRate();
-      if (!vat) throw new ValidationException('Default VAT rate missing');
-      await this.catalog.upsertPrice({
-        productId,
-        variantId: variant.id,
-        basePricePence: dto.basePricePence,
-        vatRateId: vat.id,
-      });
-    }
+      const warehouse = await this.inventory.getDefaultWarehouse();
+      const initialStock = dto.initialStock ?? 0;
+      if (warehouse && initialStock > 0) {
+        await this.inventory.adjust({
+          warehouseId: warehouse.id,
+          variantId: variant.id,
+          onHandDelta: initialStock,
+          movementType: 'MANUAL_ADJUSTMENT',
+          actorType: 'ADMIN',
+          reason: 'Initial stock on variant create',
+        });
+      }
 
-    const warehouse = await this.inventory.getDefaultWarehouse();
-    const initialStock = dto.initialStock ?? 0;
-    if (warehouse && initialStock > 0) {
-      await this.inventory.adjust({
-        warehouseId: warehouse.id,
-        variantId: variant.id,
-        onHandDelta: initialStock,
-        movementType: 'MANUAL_ADJUSTMENT',
-        actorType: 'ADMIN',
-        reason: 'Initial stock on variant create',
-      });
-    }
-
-    return {
-      ...variant,
-      onHand: initialStock,
-      available: initialStock,
-      reserved: 0,
-    };
+      return {
+        ...variant,
+        onHand: initialStock,
+        available: initialStock,
+        reserved: 0,
+      };
+    });
   }
 
   @Get('admin/products/:productId/variants')
@@ -1174,7 +1385,8 @@ export class CommerceController {
   @RequirePermissions(Permission.CATALOG_READ)
   async adminListVariants(@Param('productId') productId: string) {
     const product = await this.catalog.getProductById(productId);
-    if (!product) throw new ValidationException('Product not found', 'NOT_FOUND');
+    if (!product)
+      throw new ValidationException('Product not found', 'NOT_FOUND');
     const variants = await this.catalog.listVariants(productId);
     const warehouse = await this.inventory.getDefaultWarehouse();
     return Promise.all(
@@ -1217,7 +1429,8 @@ export class CommerceController {
   @RequirePermissions(Permission.CATALOG_READ)
   async adminGetProduct(@Param('id') id: string) {
     const product = await this.catalog.getProductById(id);
-    if (!product) throw new ValidationException('Product not found', 'NOT_FOUND');
+    if (!product)
+      throw new ValidationException('Product not found', 'NOT_FOUND');
     const variants = await this.catalog.listVariants(id);
     const warehouse = await this.inventory.getDefaultWarehouse();
     const productPrice = await this.catalog.getPriceForProduct(id);
@@ -1237,7 +1450,9 @@ export class CommerceController {
           reserved: stock?.reserved ?? 0,
           available: stock?.available ?? 0,
           basePricePence:
-            variantPrice?.basePricePence ?? productPrice?.basePricePence ?? null,
+            variantPrice?.basePricePence ??
+            productPrice?.basePricePence ??
+            null,
         };
       }),
     );
@@ -1260,7 +1475,8 @@ export class CommerceController {
     @Req() req: AdminAuthenticatedRequest,
   ) {
     const before = await this.catalog.getProductById(id);
-    if (!before) throw new ValidationException('Product not found', 'NOT_FOUND');
+    if (!before)
+      throw new ValidationException('Product not found', 'NOT_FOUND');
 
     let departmentId = body.departmentId;
     if (body.categoryId) {
@@ -1305,32 +1521,57 @@ export class CommerceController {
     @Req() req: AdminAuthenticatedRequest,
   ) {
     const before = await this.catalog.getProductById(id);
-    if (!before) throw new ValidationException('Product not found', 'NOT_FOUND');
+    if (!before)
+      throw new ValidationException('Product not found', 'NOT_FOUND');
     const variants = await this.catalog.listVariants(id);
-    let stockRowsRemoved = 0;
-    for (const variant of variants) {
-      const purged = await this.inventory.purgeVariantStock({
-        variantId: variant.id,
+    await this.assertNoReservedStock(variants.map((v) => v.id));
+    return this.uow.run(async () => {
+      let stockRowsRemoved = 0;
+      for (const variant of variants) {
+        const purged = await this.inventory.purgeVariantStock({
+          variantId: variant.id,
+          actorType: 'ADMIN',
+          actorId: req.adminUser?.id,
+          reason: `Product deleted (${before.name}) — clear linked stock`,
+        });
+        stockRowsRemoved += purged.removed;
+        if (variant.status !== 'ARCHIVED') {
+          await this.catalog.updateVariant(variant.id, { status: 'ARCHIVED' });
+        }
+      }
+      const updated = await this.catalog.updateProduct(id, {
+        status: 'ARCHIVED',
+      });
+      await this.commerce.writeAudit({
         actorType: 'ADMIN',
         actorId: req.adminUser?.id,
-        reason: `Product deleted (${before.name}) — clear linked stock`,
+        action: 'PRODUCT_DELETED',
+        entityType: 'product',
+        entityId: id,
+        before,
+        after: { ...updated, stockRowsRemoved },
       });
-      stockRowsRemoved += purged.removed;
-      if (variant.status !== 'ARCHIVED') {
-        await this.catalog.updateVariant(variant.id, { status: 'ARCHIVED' });
+      return { id, status: 'ARCHIVED', stockRowsRemoved };
+    });
+  }
+
+  /**
+   * Archiving drops stock rows; refuse while carts/orders hold units, or the
+   * open orders could never be shipped.
+   */
+  private async assertNoReservedStock(variantIds: string[]) {
+    const warehouse = await this.inventory.getDefaultWarehouse();
+    if (!warehouse) return;
+    for (const variantId of variantIds) {
+      const stock = await this.inventory.getItem(warehouse.id, variantId);
+      if (stock && stock.reserved > 0) {
+        throw new ConflictException(
+          `${stock.reserved} unit(s) are reserved by open carts or orders. Fulfil or cancel those orders first, or set the product to INACTIVE to stop new sales.`,
+          'STOCK_RESERVED',
+          { variantId, reserved: stock.reserved },
+        );
       }
     }
-    const updated = await this.catalog.updateProduct(id, { status: 'ARCHIVED' });
-    await this.commerce.writeAudit({
-      actorType: 'ADMIN',
-      actorId: req.adminUser?.id,
-      action: 'PRODUCT_DELETED',
-      entityType: 'product',
-      entityId: id,
-      before,
-      after: { ...updated, stockRowsRemoved },
-    });
-    return { id, status: 'ARCHIVED', stockRowsRemoved };
   }
 
   @Patch('admin/products/:productId/variants/:variantId')
@@ -1375,13 +1616,16 @@ export class CommerceController {
     if (!variant || variant.productId !== productId) {
       throw new ValidationException('Variant not found', 'NOT_FOUND');
     }
-    await this.inventory.purgeVariantStock({
-      variantId,
-      actorType: 'ADMIN',
-      actorId: req.adminUser?.id,
-      reason: `Variant deleted (${variant.sku}) — clear linked stock`,
+    await this.assertNoReservedStock([variantId]);
+    return this.uow.run(async () => {
+      await this.inventory.purgeVariantStock({
+        variantId,
+        actorType: 'ADMIN',
+        actorId: req.adminUser?.id,
+        reason: `Variant deleted (${variant.sku}) — clear linked stock`,
+      });
+      return this.catalog.updateVariant(variantId, { status: 'ARCHIVED' });
     });
-    return this.catalog.updateVariant(variantId, { status: 'ARCHIVED' });
   }
 
   // —— Admin inventory ——
@@ -1395,7 +1639,9 @@ export class CommerceController {
   @Get('admin/inventory')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.INVENTORY_ADJUST)
-  async listInventory(@Query() query: PaginationQueryDto & { warehouseId?: string }) {
+  async listInventory(
+    @Query() query: PaginationQueryDto & { warehouseId?: string },
+  ) {
     const page = normalizePagination(query.page, query.pageSize);
     const result = await this.inventory.listItems({
       ...page,
@@ -1446,7 +1692,9 @@ export class CommerceController {
   @Get('admin/inventory/movements')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.INVENTORY_ADJUST)
-  async listMovements(@Query() query: PaginationQueryDto & { variantId?: string }) {
+  async listMovements(
+    @Query() query: PaginationQueryDto & { variantId?: string },
+  ) {
     const page = normalizePagination(query.page, query.pageSize);
     const result = await this.inventory.listMovements({
       ...page,
@@ -1490,9 +1738,15 @@ export class CommerceController {
           await this.commerce.listPaymentProofs(payment.id),
         )
       : [];
+    const [shipments, refunds] = await Promise.all([
+      this.commerce.listShipments(order.id),
+      this.commerce.listRefunds(order.id),
+    ]);
     return {
       ...order,
       items,
+      shipments,
+      refunds,
       payment: payment
         ? {
             id: payment.id,
@@ -1519,6 +1773,7 @@ export class CommerceController {
       toStatus: dto.status,
       adminId: req.adminUser!.id,
       note: dto.note,
+      restock: dto.restock,
       tracking: {
         carrier: dto.carrier,
         trackingNumber: dto.trackingNumber,
@@ -1531,8 +1786,8 @@ export class CommerceController {
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.ORDER_CANCEL)
   async adminCancel(
-    @Param('id') id: string,
-    @Body() body: { reason: string },
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: CancelOrderDto,
     @Req() req: AdminAuthenticatedRequest,
   ) {
     return this.cancelOrder.execute({
@@ -1540,6 +1795,47 @@ export class CommerceController {
       actorType: 'ADMIN',
       actorId: req.adminUser!.id,
       reason: body.reason,
+    });
+  }
+
+  @Post('admin/orders/:id/shipments')
+  @UseGuards(AdminAuthGuard, PermissionsGuard)
+  @RequirePermissions(Permission.ORDERS_STATUS)
+  async adminCreateShipment(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreateShipmentDto,
+    @Req() req: AdminAuthenticatedRequest,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.createShipment.execute({
+      orderId: id,
+      adminId: req.adminUser!.id,
+      items: dto.items,
+      carrier: dto.carrier,
+      trackingNumber: dto.trackingNumber,
+      trackingUrl: dto.trackingUrl,
+      note: dto.note,
+      idempotencyKey,
+    });
+  }
+
+  @Post('admin/orders/:id/refunds')
+  @UseGuards(AdminAuthGuard, PermissionsGuard)
+  @RequirePermissions(Permission.PAYMENT_VERIFY)
+  async adminCreateRefund(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreateRefundDto,
+    @Req() req: AdminAuthenticatedRequest,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.createRefund.execute({
+      orderId: id,
+      adminId: req.adminUser!.id,
+      amountPence: dto.amountPence,
+      reason: dto.reason,
+      reference: dto.reference,
+      items: dto.items,
+      idempotencyKey,
     });
   }
 
@@ -1599,15 +1895,54 @@ export class CommerceController {
   @Post('admin/bank-accounts')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.MANAGE_BANK_CONFIG)
-  upsertBankAccount(@Body() dto: UpsertBankAccountDto) {
-    return this.commerce.upsertBankAccount(dto);
+  upsertBankAccount(
+    @Body() dto: UpsertBankAccountDto,
+    @Req() req: AdminAuthenticatedRequest,
+  ) {
+    return this.uow.run(async () => {
+      const account = await this.commerce.upsertBankAccount({
+        ...dto,
+        sortCode: dto.sortCode.replace(
+          /^(\d{2})-?(\d{2})-?(\d{2})$/,
+          '$1-$2-$3',
+        ),
+        iban: dto.iban ?? null,
+      });
+      await this.commerce.writeAudit({
+        actorType: 'ADMIN',
+        actorId: req.adminUser?.id,
+        action: dto.id ? 'BANK_ACCOUNT_UPDATED' : 'BANK_ACCOUNT_CREATED',
+        entityType: 'payment_bank_account',
+        entityId: account.id,
+        after: {
+          bankName: account.bankName,
+          sortCode: account.sortCode,
+          accountNumberLast4: account.accountNumber.slice(-4),
+          isActive: account.isActive,
+        },
+      });
+      return account;
+    });
   }
 
   @Patch('admin/bank-accounts/:id/activate')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.MANAGE_BANK_CONFIG)
-  activateBankAccount(@Param('id') id: string) {
-    return this.commerce.setBankAccountActive(id, true);
+  activateBankAccount(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: AdminAuthenticatedRequest,
+  ) {
+    return this.uow.run(async () => {
+      const account = await this.commerce.setBankAccountActive(id, true);
+      await this.commerce.writeAudit({
+        actorType: 'ADMIN',
+        actorId: req.adminUser?.id,
+        action: 'BANK_ACCOUNT_ACTIVATED',
+        entityType: 'payment_bank_account',
+        entityId: account.id,
+      });
+      return account;
+    });
   }
 
   @Post('admin/payments/:id/approve')
@@ -1645,8 +1980,39 @@ export class CommerceController {
   @Get('admin/dashboard')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.REPORTING_READ)
-  dashboard() {
-    return this.commerce.getDashboardStats();
+  async dashboard() {
+    const policy = await this.settings.getInventoryPolicy();
+    return this.commerce.getDashboardStats({
+      lowStockThreshold: policy.lowStockThreshold,
+    });
+  }
+
+  @Post('admin/maintenance/release-expired-holds')
+  @UseGuards(AdminAuthGuard, PermissionsGuard)
+  @RequirePermissions(Permission.ORDER_CANCEL)
+  releaseExpired(@Req() req: AdminAuthenticatedRequest) {
+    return this.releaseExpiredHolds.execute({
+      actorType: 'ADMIN',
+      actorId: req.adminUser!.id,
+    });
+  }
+
+  /** Vercel Cron entry point; authorised by the CRON_SECRET bearer token. */
+  @Get('cron/release-expired-holds')
+  async cronReleaseExpired(@Headers('authorization') authorization?: string) {
+    const secret = this.config.get<string>('cronSecret');
+    if (
+      !secret ||
+      !constantTimeEquals(authorization ?? '', `Bearer ${secret}`)
+    ) {
+      throw new NotFoundException('Route');
+    }
+    const result = await this.releaseExpiredHolds.execute({
+      actorType: 'SYSTEM',
+    });
+    const rateLimitBucketsPurged = await this.rateLimiter.purgeOlderThan(24);
+    const emails = await this.notifier.dispatchDue();
+    return { ...result, rateLimitBucketsPurged, emails };
   }
 
   @Get('admin/customers')
@@ -1663,7 +2029,8 @@ export class CommerceController {
   @RequirePermissions(Permission.ORDERS_READ)
   async adminGetCustomer(@Param('id') id: string) {
     const customer = await this.customers.findById(id);
-    if (!customer) throw new ValidationException('Customer not found', 'NOT_FOUND');
+    if (!customer)
+      throw new ValidationException('Customer not found', 'NOT_FOUND');
     const orders = await this.commerce.listOrders({
       page: 1,
       pageSize: 50,
@@ -1681,9 +2048,11 @@ export class CommerceController {
   @RequirePermissions(Permission.CUSTOMERS_BLOCK)
   async adminSetCustomerStatus(
     @Param('id') id: string,
-    @Body() body: { status: 'ACTIVE' | 'BLOCKED' },
+    @Body() body: CustomerStatusDto,
     @Req() req: AdminAuthenticatedRequest,
   ) {
+    const existing = await this.customers.findById(id);
+    if (!existing) throw new NotFoundException('Customer', id);
     const updated = await this.customers.setStatus(id, body.status);
     await this.commerce.writeAudit({
       actorType: 'ADMIN',
@@ -1719,14 +2088,10 @@ export class CommerceController {
     @Req() req: AdminAuthenticatedRequest,
   ) {
     const order = await this.commerce.getOrderById(id);
-    if (!order) throw new ValidationException('Order not found', 'NOT_FOUND');
-    try {
-      if (
-        order.status !== 'CANCELLED' &&
-        order.status !== 'DELIVERED' &&
-        order.status !== 'SHIPPED' &&
-        order.status !== 'REFUNDED'
-      ) {
+    if (!order) throw new NotFoundException('Order', id);
+    await this.uow.run(async () => {
+      if (isCancellable(order.status)) {
+        // Releases its stock reservation before the rows disappear.
         await this.cancelOrder.execute({
           orderId: id,
           actorType: 'ADMIN',
@@ -1734,31 +2099,34 @@ export class CommerceController {
           reason: 'Order deleted by admin',
         });
       }
-    } catch {
-      // Still purge history if cancel is not possible
-    }
-    await this.commerce.purgeOrderCascade(id);
-    await this.commerce.writeAudit({
-      actorType: 'ADMIN',
-      actorId: req.adminUser?.id,
-      action: 'ORDER_PURGED',
-      entityType: 'order',
-      entityId: id,
-      before: { orderNumber: order.orderNumber, status: order.status },
+      await this.commerce.purgeOrderCascade(id);
+      await this.commerce.writeAudit({
+        actorType: 'ADMIN',
+        actorId: req.adminUser?.id,
+        action: 'ORDER_PURGED',
+        entityType: 'order',
+        entityId: id,
+        before: {
+          orderNumber: order.orderNumber,
+          status: order.status,
+          paymentStatus: order.paymentStatus,
+          grandTotalPence: order.grandTotalPence,
+        },
+      });
     });
     return { deleted: true, id };
   }
 
   @Get('admin/settings')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
-  @RequirePermissions(Permission.MANAGE_BANK_CONFIG)
+  @RequirePermissions(Permission.MANAGE_SETTINGS)
   listSettings() {
     return this.settings.list();
   }
 
   @Get('admin/settings/:key')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
-  @RequirePermissions(Permission.MANAGE_BANK_CONFIG)
+  @RequirePermissions(Permission.MANAGE_SETTINGS)
   async getSetting(@Param('key') key: string) {
     const row = await this.settings.get(key);
     if (!row) throw new ValidationException('Setting not found', 'NOT_FOUND');
@@ -1767,15 +2135,24 @@ export class CommerceController {
 
   @Put('admin/settings/:key')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
-  @RequirePermissions(Permission.MANAGE_BANK_CONFIG)
+  @RequirePermissions(Permission.MANAGE_SETTINGS)
   async upsertSetting(
     @Param('key') key: string,
     @Body() body: UpsertSettingDto,
     @Req() req: AdminAuthenticatedRequest,
   ) {
-    if (!body.value || typeof body.value !== 'object') {
+    if (
+      !body.value ||
+      typeof body.value !== 'object' ||
+      Array.isArray(body.value)
+    ) {
       throw new ValidationException('value object is required');
     }
+    const defaults = this.settings.getDefaults(key);
+    if (!defaults) {
+      throw new NotFoundException('Setting', key);
+    }
+    this.assertSettingTypes(key, defaults, body.value);
     const existing = await this.settings.get(key);
     const merged = { ...(existing?.value ?? {}), ...body.value };
     const updated = await this.settings.upsert(
@@ -1794,6 +2171,33 @@ export class CommerceController {
       after: updated.value,
     });
     return updated;
+  }
+
+  /** Known fields must keep their type; counts and money must be whole and >= 0. */
+  private assertSettingTypes(
+    key: string,
+    defaults: Record<string, unknown>,
+    value: Record<string, unknown>,
+  ) {
+    for (const [field, next] of Object.entries(value)) {
+      if (!(field in defaults)) continue;
+      const expected = typeof defaults[field];
+      const ok =
+        expected === 'number'
+          ? typeof next === 'number' && Number.isInteger(next) && next >= 0
+          : typeof next === expected;
+      if (!ok) {
+        throw new ValidationException(
+          `${key}.${field} must be ${
+            expected === 'number'
+              ? 'a whole number of 0 or more'
+              : `a ${expected}`
+          }`,
+          'INVALID_SETTING',
+          { key, field },
+        );
+      }
+    }
   }
 
   @Post('admin/departments')
@@ -1949,7 +2353,9 @@ export class CommerceController {
   @Post('admin/brands')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.CATALOG_WRITE)
-  createBrand(@Body() body: { name: string; slug: string; description?: string }) {
+  createBrand(
+    @Body() body: { name: string; slug: string; description?: string },
+  ) {
     return this.catalog.createBrand(body);
   }
 
@@ -1963,35 +2369,62 @@ export class CommerceController {
   }
 
   @Post('orders/:orderNumber/returns')
+  @RateLimit({ name: 'returns', max: 10, windowSeconds: 3600 })
   @UseGuards(SupabaseAuthGuard)
   async requestReturn(
     @Param('orderNumber') orderNumber: string,
     @CurrentUser() user: User,
-    @Body()
-    body: {
-      reason?: string;
-      customerNote?: string;
-      items: Array<{ orderItemId: string; quantity: number; reason?: string }>;
-    },
+    @Body() body: ReturnRequestDto,
   ) {
-    const order = await this.commerce.getOrderByNumber(orderNumber);
-    if (!order) throw new ValidationException('Order not found', 'NOT_FOUND');
-    if (order.customerId && order.customerId !== user.id) {
-      throw new ValidationException('Forbidden', 'FORBIDDEN');
-    }
-    if (
-      order.status !== OrderStatus.SHIPPED &&
-      order.status !== OrderStatus.DELIVERED
-    ) {
-      throw new ValidationException('Returns only after shipment');
-    }
-    const ret = await this.commerce.createReturnRequest({
-      orderId: order.id,
-      reason: body.reason,
-      customerNote: body.customerNote,
-      items: body.items,
-    });
-    if (order.status === OrderStatus.DELIVERED || order.status === OrderStatus.SHIPPED) {
+    return this.uow.run(async () => {
+      const order = await this.commerce.getOrderByNumber(orderNumber);
+      if (!order) throw new NotFoundException('Order', orderNumber);
+      const ownsOrder = order.customerId
+        ? order.customerId === user.id
+        : order.email === user.email.trim().toLowerCase();
+      if (!ownsOrder) throw new NotFoundException('Order', orderNumber);
+
+      if (
+        order.status !== OrderStatus.SHIPPED &&
+        order.status !== OrderStatus.DELIVERED
+      ) {
+        throw new ValidationException(
+          'Returns can only be requested once an order has shipped',
+          'RETURN_NOT_ALLOWED',
+          { status: order.status },
+        );
+      }
+
+      const orderItems = await this.commerce.listOrderItems(order.id);
+      const requested = new Map<string, number>();
+      for (const line of body.items) {
+        requested.set(
+          line.orderItemId,
+          (requested.get(line.orderItemId) ?? 0) + line.quantity,
+        );
+      }
+      for (const [orderItemId, quantity] of requested) {
+        const item = orderItems.find((i) => i.id === orderItemId);
+        if (!item) {
+          throw new ValidationException(
+            'A returned item is not part of this order',
+            'RETURN_ITEM_INVALID',
+            { orderItemId },
+          );
+        }
+        if (quantity > item.quantity) {
+          throw new ValidationException(
+            `You can return at most ${item.quantity} of ${item.productName}`,
+            'RETURN_QUANTITY_INVALID',
+            { orderItemId, ordered: item.quantity, requested: quantity },
+          );
+        }
+      }
+
+      if (!order.customerId) {
+        await this.commerce.claimGuestOrder(order.id, user.id);
+      }
+      // Status first: a duplicate request conflicts and rolls back.
       await this.commerce.updateOrderStatus({
         orderId: order.id,
         fromStatus: order.status,
@@ -2000,7 +2433,18 @@ export class CommerceController {
         actorId: user.id,
         note: body.reason ?? 'Return requested',
       });
-    }
-    return ret;
+      return this.commerce.createReturnRequest({
+        orderId: order.id,
+        reason: body.reason,
+        customerNote: body.customerNote,
+        items: body.items,
+      });
+    });
   }
+}
+
+function constantTimeEquals(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }

@@ -17,6 +17,7 @@ export interface StorageRepository {
     expiresInSeconds: number,
   ): Promise<string>;
   delete(bucket: string, paths: string[]): Promise<void>;
+  exists(bucket: string, path: string): Promise<boolean>;
 }
 
 export const STORAGE_REPOSITORY = Symbol('STORAGE_REPOSITORY');

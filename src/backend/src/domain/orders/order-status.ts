@@ -7,6 +7,7 @@ export const OrderStatus = {
   CONFIRMED: 'CONFIRMED',
   PROCESSING: 'PROCESSING',
   PACKED: 'PACKED',
+  PARTIALLY_SHIPPED: 'PARTIALLY_SHIPPED',
   SHIPPED: 'SHIPPED',
   DELIVERED: 'DELIVERED',
   CANCELLED: 'CANCELLED',
@@ -21,22 +22,32 @@ const TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
   PENDING_PAYMENT: ['PAYMENT_SUBMITTED', 'CANCELLED'],
   PAYMENT_SUBMITTED: ['PAYMENT_UNDER_REVIEW', 'CANCELLED'],
   PAYMENT_UNDER_REVIEW: ['CONFIRMED', 'PAYMENT_SUBMITTED', 'CANCELLED'],
-  CONFIRMED: ['PROCESSING', 'CANCELLED'],
-  PROCESSING: ['PACKED', 'CANCELLED'],
-  PACKED: ['SHIPPED', 'CANCELLED'],
+  CONFIRMED: ['PROCESSING', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CANCELLED'],
+  PROCESSING: ['PACKED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CANCELLED'],
+  PACKED: ['SHIPPED', 'PARTIALLY_SHIPPED', 'CANCELLED'],
+  // Further parcels keep the order here until every unit is shipped or cancelled.
+  PARTIALLY_SHIPPED: ['PARTIALLY_SHIPPED', 'SHIPPED'],
   SHIPPED: ['DELIVERED', 'RETURN_REQUESTED'],
   DELIVERED: ['RETURN_REQUESTED'],
   CANCELLED: [],
-  RETURN_REQUESTED: ['RETURNED', 'CANCELLED'],
+  // A declined return puts the order back to DELIVERED; goods already left
+  // the warehouse, so cancelling at this point is not meaningful.
+  RETURN_REQUESTED: ['RETURNED', 'DELIVERED'],
   RETURNED: ['REFUNDED'],
   REFUNDED: [],
 };
 
-export function canTransitionOrder(from: OrderStatus, to: OrderStatus): boolean {
+export function canTransitionOrder(
+  from: OrderStatus,
+  to: OrderStatus,
+): boolean {
   return TRANSITIONS[from].includes(to);
 }
 
-export function assertOrderTransition(from: OrderStatus, to: OrderStatus): void {
+export function assertOrderTransition(
+  from: OrderStatus,
+  to: OrderStatus,
+): void {
   if (!canTransitionOrder(from, to)) {
     throw new InvalidTransitionException(
       `Invalid order transition from ${from} to ${to}`,
@@ -48,6 +59,7 @@ export function assertOrderTransition(from: OrderStatus, to: OrderStatus): void 
 
 export function isCancellable(status: OrderStatus): boolean {
   return ![
+    OrderStatus.PARTIALLY_SHIPPED,
     OrderStatus.SHIPPED,
     OrderStatus.DELIVERED,
     OrderStatus.CANCELLED,

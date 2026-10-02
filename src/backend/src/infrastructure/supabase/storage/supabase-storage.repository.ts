@@ -15,6 +15,21 @@ export class SupabaseStorageRepository implements StorageRepository {
     private readonly supabase: SupabaseClient,
   ) {}
 
+  async exists(bucket: string, path: string): Promise<boolean> {
+    const { data, error } = await this.supabase.storage
+      .from(bucket)
+      .exists(path);
+    if (error) {
+      // storage-js reports a missing object as an error with status 400/404
+      const status =
+        (error as { status?: number; statusCode?: string | number }).status ??
+        Number((error as { statusCode?: string | number }).statusCode);
+      if (status === 400 || status === 404) return false;
+      throw new DomainException(error.message, 'STORAGE_ERROR');
+    }
+    return Boolean(data);
+  }
+
   async upload(input: UploadFileInput): Promise<StoredFile> {
     const { data, error } = await this.supabase.storage
       .from(input.bucket)

@@ -1,13 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  and,
-  count,
-  desc,
-  eq,
-  ne,
-  sql,
-  type SQL,
-} from 'drizzle-orm';
+import { and, count, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import {
   InsufficientStockException,
   ValidationException,
@@ -19,6 +11,7 @@ import type {
   Warehouse,
 } from '../../../domain/repositories/inventory.repository.js';
 import { DRIZZLE, type DrizzleDB } from '../../drizzle/drizzle.tokens.js';
+import { rpcErrorMessage } from '../../drizzle/pg-errors.js';
 import {
   inventoryItems,
   inventoryMovements,
@@ -149,6 +142,8 @@ export class SupabaseInventoryRepository implements InventoryRepository {
     actorType?: string;
     actorId?: string | null;
     reason?: string | null;
+    referenceType?: string | null;
+    referenceId?: string | null;
   }): Promise<InventoryItem> {
     return this.callInventoryRpc(
       sql`select * from public.adjust_inventory(
@@ -158,7 +153,9 @@ export class SupabaseInventoryRepository implements InventoryRepository {
         ${input.movementType}::public.inventory_movement_type,
         ${input.actorType ?? 'ADMIN'}::public.actor_type,
         ${input.actorId ?? null}::uuid,
-        ${input.reason ?? null}::text
+        ${input.reason ?? null}::text,
+        ${input.referenceType ?? null}::text,
+        ${input.referenceId ?? null}::uuid
       )`,
     );
   }
@@ -194,8 +191,8 @@ export class SupabaseInventoryRepository implements InventoryRepository {
     actorType?: string;
     actorId?: string | null;
     reason?: string | null;
-  }): Promise<InventoryItem> {
-    return this.callInventoryRpc(
+  }): Promise<InventoryItem | null> {
+    return this.callInventoryRpcNullable(
       sql`select * from public.release_inventory(
         ${input.warehouseId}::uuid,
         ${input.variantId}::uuid,
@@ -207,6 +204,48 @@ export class SupabaseInventoryRepository implements InventoryRepository {
         ${input.reason ?? null}::text
       )`,
     );
+  }
+
+  async setHold(input: {
+    warehouseId: string;
+    variantId: string;
+    quantity: number;
+    referenceType: string;
+    referenceId: string;
+    actorType?: string;
+    actorId?: string | null;
+    reason?: string | null;
+  }): Promise<InventoryItem | null> {
+    return this.callInventoryRpcNullable(
+      sql`select * from public.set_inventory_hold(
+        ${input.warehouseId}::uuid,
+        ${input.variantId}::uuid,
+        ${input.referenceType}::text,
+        ${input.referenceId}::uuid,
+        ${input.quantity}::int,
+        ${input.actorType ?? 'SYSTEM'}::public.actor_type,
+        ${input.actorId ?? null}::uuid,
+        ${input.reason ?? null}::text
+      )`,
+    );
+  }
+
+  async getHold(input: {
+    warehouseId: string;
+    variantId: string;
+    referenceType: string;
+    referenceId: string;
+  }): Promise<number> {
+    const result = await this.db.execute(
+      sql`select public.inventory_hold_qty(
+        ${input.warehouseId}::uuid,
+        ${input.variantId}::uuid,
+        ${input.referenceType}::text,
+        ${input.referenceId}::uuid
+      ) as held`,
+    );
+    const rows = (result as unknown as { rows?: Array<{ held: number }> }).rows;
+    return Number(rows?.[0]?.held ?? 0);
   }
 
   async fulfill(input: {
@@ -248,10 +287,7 @@ export class SupabaseInventoryRepository implements InventoryRepository {
         .orderBy(desc(inventoryMovements.createdAt))
         .limit(params.pageSize)
         .offset(offset),
-      this.db
-        .select({ value: count() })
-        .from(inventoryMovements)
-        .where(where),
+      this.db.select({ value: count() }).from(inventoryMovements).where(where),
     ]);
     return {
       items: items.map((row) => this.mapMovement(row)),
@@ -284,43 +320,77 @@ export class SupabaseInventoryRepository implements InventoryRepository {
           newOnHand: 0,
           previousReserved: row.reserved,
           newReserved: 0,
-          actorType: (input.actorType as 'ADMIN' | 'CUSTOMER' | 'SYSTEM') ?? 'ADMIN',
+          actorType:
+            (input.actorType as 'ADMIN' | 'CUSTOMER' | 'SYSTEM') ?? 'ADMIN',
           actorId: input.actorId ?? null,
           reason:
             input.reason ??
             'Product/variant deleted — stock removed from sellable inventory',
         });
       }
-      await this.db
-        .delete(inventoryItems)
-        .where(eq(inventoryItems.id, row.id));
+      await this.db.delete(inventoryItems).where(eq(inventoryItems.id, row.id));
       removed += 1;
     }
     return { removed };
   }
 
   private async callInventoryRpc(query: SQL): Promise<InventoryItem> {
-    try {
-      const result = await this.db.execute(query);
-      const row = (result as unknown as { rows?: Record<string, unknown>[] })
-        .rows?.[0] as Record<string, unknown> | undefined;
-      if (!row) throw new ValidationException('Inventory RPC returned no row');
-      return this.mapItemFromRpc(row);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.mapRpcError(message);
+    const item = await this.callInventoryRpcNullable(query);
+    if (!item) {
+      throw new ValidationException(
+        'Stock record not found for this variant',
+        'INVENTORY_ITEM_NOT_FOUND',
+      );
     }
+    return item;
   }
 
-  private mapRpcError(message: string): never {
+  private async callInventoryRpcNullable(
+    query: SQL,
+  ): Promise<InventoryItem | null> {
+    let result: unknown;
+    try {
+      result = await this.db.execute(query);
+    } catch (error) {
+      this.mapRpcError(error);
+    }
+    const row = (result as { rows?: Record<string, unknown>[] }).rows?.[0];
+    if (!row || row.id == null) return null;
+    return this.mapItemFromRpc(row);
+  }
+
+  /** Translates the RPCs' business errors; anything else propagates as a 500. */
+  private mapRpcError(error: unknown): never {
+    const message = rpcErrorMessage(error);
     if (message.includes('INSUFFICIENT_STOCK')) {
-      const match = message.match(/available (\d+), requested (\d+)/);
+      const match = message.match(/available (-?\d+), requested (\d+)/);
       throw new InsufficientStockException(
-        match ? Number(match[1]) : 0,
+        match ? Math.max(0, Number(match[1])) : 0,
         match ? Number(match[2]) : 0,
       );
     }
-    throw new ValidationException(message);
+    if (message.includes('Adjustment would make on_hand < reserved')) {
+      throw new ValidationException(
+        'Stock cannot go below the quantity reserved for open carts and orders',
+        'STOCK_BELOW_RESERVED',
+      );
+    }
+    if (message.includes('Adjustment would make on_hand negative')) {
+      throw new ValidationException(
+        'Stock cannot go below zero',
+        'STOCK_NEGATIVE',
+      );
+    }
+    if (
+      message.includes('Quantity must be positive') ||
+      message.includes('Hold quantity must be zero or positive')
+    ) {
+      throw new ValidationException(
+        'Quantity must be positive',
+        'INVALID_QUANTITY',
+      );
+    }
+    throw error;
   }
 
   private mapWarehouse(row: typeof warehouses.$inferSelect): Warehouse {

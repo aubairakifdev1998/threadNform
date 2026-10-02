@@ -53,23 +53,17 @@ export default async function handler(
           'GET,POST,PUT,PATCH,DELETE,OPTIONS',
         );
       }
-      res.statusCode = 500;
+      res.statusCode = 503;
       res.setHeader('Content-Type', 'application/json');
+      // Details stay in the function logs; never send stack traces to clients.
       res.end(
         JSON.stringify({
           success: false,
           error: {
-            code: 'BOOTSTRAP_FAILED',
+            code: 'SERVICE_UNAVAILABLE',
             message:
-              error instanceof Error
-                ? error.message
-                : 'Backend failed to start',
-            details: {
-              stack:
-                error instanceof Error
-                  ? error.stack?.split('\n').slice(0, 8)
-                  : undefined,
-            },
+              'The service is temporarily unavailable. Please try again shortly.',
+            details: {},
           },
         }),
       );

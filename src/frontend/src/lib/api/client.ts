@@ -33,18 +33,29 @@ export type RequestOptions = {
   headers?: HeadersInit;
 };
 
+/** fetch() rejects only on network failure (offline, DNS, CORS, aborted). */
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new ApiError(
+      "We couldn't reach the server. Check your connection and try again.",
+      { code: "NETWORK_ERROR", status: 0 },
+    );
+  }
+}
+
 function getBaseUrl() {
   return (
     process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000/api/v1"
   ).replace(/\/$/, "");
 }
 
-function buildUrl(
-  path: string,
-  searchParams?: RequestOptions["searchParams"],
-) {
+function buildUrl(path: string, searchParams?: RequestOptions["searchParams"]) {
   const url = new URL(
-    path.startsWith("http") ? path : `${getBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`,
+    path.startsWith("http")
+      ? path
+      : `${getBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`,
   );
 
   if (searchParams) {
@@ -89,7 +100,7 @@ export async function apiRequest<T>(
     headers.set("Idempotency-Key", idempotencyKey);
   }
 
-  const response = await fetch(buildUrl(path, searchParams), {
+  const response = await send(buildUrl(path, searchParams), {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -101,13 +112,17 @@ export async function apiRequest<T>(
     return undefined as T;
   }
 
-  const payload = (await response.json().catch(() => null)) as ApiEnvelope<T> | null;
+  const payload = (await response
+    .json()
+    .catch(() => null)) as ApiEnvelope<T> | null;
 
   if (!payload || typeof payload !== "object" || !("success" in payload)) {
-    throw new ApiError("Unexpected response from API", {
-      code: "UNEXPECTED_RESPONSE",
-      status: response.status,
-    });
+    throw new ApiError(
+      response.status >= 500
+        ? "The service is temporarily unavailable. Please try again shortly."
+        : "Unexpected response from the server.",
+      { code: "UNEXPECTED_RESPONSE", status: response.status },
+    );
   }
 
   if (!payload.success) {
@@ -138,7 +153,7 @@ export async function apiUpload<T>(
     headers.set("Idempotency-Key", options.idempotencyKey);
   }
 
-  const response = await fetch(buildUrl(path, options.searchParams), {
+  const response = await send(buildUrl(path, options.searchParams), {
     method: "POST",
     headers,
     body: formData,
@@ -146,13 +161,17 @@ export async function apiUpload<T>(
     next: options.next,
   });
 
-  const payload = (await response.json().catch(() => null)) as ApiEnvelope<T> | null;
+  const payload = (await response
+    .json()
+    .catch(() => null)) as ApiEnvelope<T> | null;
 
   if (!payload || typeof payload !== "object" || !("success" in payload)) {
-    throw new ApiError("Unexpected response from API", {
-      code: "UNEXPECTED_RESPONSE",
-      status: response.status,
-    });
+    throw new ApiError(
+      response.status >= 500
+        ? "The service is temporarily unavailable. Please try again shortly."
+        : "Unexpected response from the server.",
+      { code: "UNEXPECTED_RESPONSE", status: response.status },
+    );
   }
 
   if (!payload.success) {

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ordersApi } from "@/lib/api";
 import { apiUpload, ApiError } from "@/lib/api/client";
+import { getFreshAccessToken } from "@/lib/auth/current-user";
 import { tokenStore } from "@/lib/auth/session";
 import { formatGbp } from "@/lib/money";
 import { OrderShimmer, Spinner } from "@/components/ui/page-shimmers";
@@ -122,12 +123,30 @@ type OrderDetail = {
   trackingUrl?: string | null;
   grandTotalPence?: number;
   totalPence?: number;
+  refundedPence?: number;
   items?: Array<{
     id: string;
     productName: string;
     sku: string;
     quantity: number;
     lineGrossPence: number;
+    quantityShipped?: number;
+    quantityCancelled?: number;
+    quantityReturned?: number;
+  }>;
+  shipments?: Array<{
+    id: string;
+    carrier: string | null;
+    trackingNumber: string | null;
+    trackingUrl: string | null;
+    shippedAt: string;
+    items: Array<{ orderItemId: string; quantity: number }>;
+  }>;
+  refunds?: Array<{
+    id: string;
+    amountPence: number;
+    reason: string;
+    createdAt: string;
   }>;
   payment?: {
     id?: string;
@@ -200,12 +219,16 @@ export function OrderConfirmationPanel({
   }, [orderNumber]);
 
   async function uploadProof(file: File) {
-    const token = tokenStore.getAccessToken();
+    const token = await getFreshAccessToken();
     if (!token) {
       toast.error("Sign in to upload payment proof");
       return;
     }
-    if (order?.paymentStatus === "VERIFIED") {
+    if (
+      ["VERIFIED", "PARTIALLY_REFUNDED", "REFUND_PENDING", "REFUNDED"].includes(
+        order?.paymentStatus ?? "",
+      )
+    ) {
       toast.error("This payment is already verified");
       return;
     }
@@ -279,9 +302,12 @@ export function OrderConfirmationPanel({
     order.totalPence ??
     0;
 
-  const paymentDone = ["VERIFIED", "REFUNDED"].includes(
-    order.payment?.status ?? order.paymentStatus ?? "",
-  );
+  const paymentDone = [
+    "VERIFIED",
+    "PARTIALLY_REFUNDED",
+    "REFUND_PENDING",
+    "REFUNDED",
+  ].includes(order.payment?.status ?? order.paymentStatus ?? "");
   const awaitingReview = ["PROOF_SUBMITTED", "UNDER_REVIEW"].includes(
     order.payment?.status ?? order.paymentStatus ?? "",
   );
@@ -315,6 +341,22 @@ export function OrderConfirmationPanel({
               <li key={item.id} className="flex justify-between gap-3">
                 <span className="text-muted-foreground">
                   {item.productName} · {item.sku} × {item.quantity}
+                  {item.quantityShipped &&
+                  item.quantityShipped < item.quantity ? (
+                    <span className="block text-xs">
+                      {item.quantityShipped} of {item.quantity} shipped
+                    </span>
+                  ) : null}
+                  {item.quantityCancelled ? (
+                    <span className="block text-xs">
+                      {item.quantityCancelled} cancelled and refunded
+                    </span>
+                  ) : null}
+                  {item.quantityReturned ? (
+                    <span className="block text-xs">
+                      {item.quantityReturned} returned
+                    </span>
+                  ) : null}
                 </span>
                 <span className="tabular-nums">
                   {formatGbp(item.lineGrossPence)}
@@ -325,33 +367,102 @@ export function OrderConfirmationPanel({
         </section>
       ) : null}
 
-      {(order.carrier || order.trackingNumber || order.trackingUrl) && (
+      {order.shipments && order.shipments.length > 1 ? (
         <section className="space-y-3 border border-border bg-secondary/30 p-5 text-sm">
-          <h2 className="font-medium">Delivery tracking</h2>
-          {order.carrier ? (
-            <p className="text-muted-foreground">
-              Carrier:{" "}
-              <strong className="text-foreground">{order.carrier}</strong>
-            </p>
-          ) : null}
-          {order.trackingNumber ? (
-            <p className="text-muted-foreground">
-              Tracking number:{" "}
-              <strong className="text-foreground">{order.trackingNumber}</strong>
-            </p>
-          ) : null}
-          {order.trackingUrl ? (
-            <a
-              href={order.trackingUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex text-sm underline underline-offset-4"
-            >
-              Track shipment
-            </a>
-          ) : null}
+          <h2 className="font-medium">Shipments ({order.shipments.length})</h2>
+          <ul className="space-y-3">
+            {order.shipments.map((shipment, index) => (
+              <li key={shipment.id} className="space-y-1">
+                <p className="font-medium">
+                  Parcel {index + 1} ·{" "}
+                  {new Date(shipment.shippedAt).toLocaleDateString("en-GB")}
+                </p>
+                <p className="text-muted-foreground">
+                  {shipment.items
+                    .map((line) => {
+                      const item = order.items?.find(
+                        (i) => i.id === line.orderItemId,
+                      );
+                      return `${item?.productName ?? "Item"} × ${line.quantity}`;
+                    })
+                    .join(", ")}
+                </p>
+                {shipment.carrier || shipment.trackingNumber ? (
+                  <p className="text-muted-foreground">
+                    {[shipment.carrier, shipment.trackingNumber]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                ) : null}
+                {shipment.trackingUrl ? (
+                  <a
+                    href={shipment.trackingUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-4"
+                  >
+                    Track parcel {index + 1}
+                  </a>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         </section>
-      )}
+      ) : null}
+
+      {order.refunds && order.refunds.length > 0 ? (
+        <section className="space-y-2 border border-border p-5 text-sm">
+          <h2 className="font-medium">Refunds</h2>
+          <ul className="space-y-1">
+            {order.refunds.map((refund) => (
+              <li key={refund.id} className="flex justify-between gap-3">
+                <span className="text-muted-foreground">
+                  {new Date(refund.createdAt).toLocaleDateString("en-GB")} ·{" "}
+                  {refund.reason}
+                </span>
+                <span className="tabular-nums">
+                  {formatGbp(refund.amountPence)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            Refunds are sent by bank transfer to the account you paid from and
+            can take a few working days to arrive.
+          </p>
+        </section>
+      ) : null}
+
+      {(order.shipments?.length ?? 0) <= 1 &&
+        (order.carrier || order.trackingNumber || order.trackingUrl) && (
+          <section className="space-y-3 border border-border bg-secondary/30 p-5 text-sm">
+            <h2 className="font-medium">Delivery tracking</h2>
+            {order.carrier ? (
+              <p className="text-muted-foreground">
+                Carrier:{" "}
+                <strong className="text-foreground">{order.carrier}</strong>
+              </p>
+            ) : null}
+            {order.trackingNumber ? (
+              <p className="text-muted-foreground">
+                Tracking number:{" "}
+                <strong className="text-foreground">
+                  {order.trackingNumber}
+                </strong>
+              </p>
+            ) : null}
+            {order.trackingUrl ? (
+              <a
+                href={order.trackingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex text-sm underline underline-offset-4"
+              >
+                Track shipment
+              </a>
+            ) : null}
+          </section>
+        )}
 
       {!paymentDone ? (
         <section className="space-y-3 border border-border bg-secondary/30 p-5 text-sm">
@@ -377,7 +488,8 @@ export function OrderConfirmationPanel({
               Sort code: {bank.sortCode ?? "—"} · Account:{" "}
               {bank.accountNumber ?? "—"}
               <br />
-              Reference: <strong className="text-foreground">{order.orderNumber}</strong>
+              Reference:{" "}
+              <strong className="text-foreground">{order.orderNumber}</strong>
               {bank.referenceInstructions ? (
                 <>
                   <br />
@@ -429,9 +541,7 @@ export function OrderConfirmationPanel({
                   {proof.customerReference ? (
                     <p>Ref {proof.customerReference}</p>
                   ) : null}
-                  <p>
-                    {new Date(proof.uploadedAt).toLocaleString("en-GB")}
-                  </p>
+                  <p>{new Date(proof.uploadedAt).toLocaleString("en-GB")}</p>
                   {proof.url ? (
                     <a
                       href={proof.url}
@@ -448,8 +558,8 @@ export function OrderConfirmationPanel({
           </div>
           {awaitingReview ? (
             <p className="text-sm text-muted-foreground">
-              Your proof is under review. We will update this order when
-              payment is verified.
+              Your proof is under review. We will update this order when payment
+              is verified.
             </p>
           ) : null}
         </section>
@@ -473,7 +583,9 @@ export function OrderConfirmationPanel({
           ) : (
             <>
               <div className="space-y-2">
-                <Label htmlFor="reference">Your bank reference (optional)</Label>
+                <Label htmlFor="reference">
+                  Your bank reference (optional)
+                </Label>
                 <Input
                   id="reference"
                   value={reference}

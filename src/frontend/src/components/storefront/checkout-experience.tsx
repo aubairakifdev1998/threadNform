@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { catalogApi, checkoutApi } from "@/lib/api";
 import { ApiError } from "@/lib/api/client";
 import { loadGuestCart } from "@/lib/cart/guest-cart";
+import { getFreshAccessToken } from "@/lib/auth/current-user";
 import { guestCartStore, tokenStore } from "@/lib/auth/session";
 import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,41 @@ import { CheckoutShimmer, Spinner } from "@/components/ui/page-shimmers";
 import type { Cart, ShippingMethod } from "@/types/api";
 
 const STEPS = ["Information", "Shipping", "Payment"] as const;
+
+/** Error codes meaning the cart contents must be reviewed before ordering. */
+const CART_PROBLEM_CODES = new Set([
+  "INSUFFICIENT_STOCK",
+  "VARIANT_UNAVAILABLE",
+  "PRODUCT_NOT_PURCHASABLE",
+  "PRICE_MISSING",
+  "CART_EMPTY",
+]);
+
+/**
+ * One idempotency key per cart, kept across retries and reloads so a
+ * resubmission after a lost response returns the same order instead of a
+ * duplicate. Dropped once the order is confirmed.
+ */
+function checkoutKeyFor(cartId: string): string {
+  const storageKey = `checkout-key:${cartId}`;
+  try {
+    const existing = sessionStorage.getItem(storageKey);
+    if (existing) return existing;
+    const key = crypto.randomUUID();
+    sessionStorage.setItem(storageKey, key);
+    return key;
+  } catch {
+    return `checkout-${cartId}`;
+  }
+}
+
+function clearCheckoutKey(cartId: string) {
+  try {
+    sessionStorage.removeItem(`checkout-key:${cartId}`);
+  } catch {
+    // storage unavailable
+  }
+}
 
 type CheckoutResult = {
   orderNumber: string;
@@ -35,6 +71,8 @@ export function CheckoutExperience() {
   const [methods, setMethods] = useState<ShippingMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [placing, setPlacing] = useState(false);
+  // State updates are async; a ref blocks a second click in the same tick.
+  const submittingRef = useRef(false);
   const [result, setResult] = useState<CheckoutResult | null>(null);
   const [bankDetails, setBankDetails] = useState<{
     bankName: string;
@@ -109,6 +147,11 @@ export function CheckoutExperience() {
 
   const selectedShipping = methods.find((m) => m.id === shippingMethodId);
   const itemCount = cart?.items?.length ?? 0;
+  const subtotal = cart?.subtotalPence ?? null;
+  const orderTotal =
+    subtotal != null && selectedShipping
+      ? subtotal + selectedShipping.pricePence
+      : null;
 
   async function goToShipping() {
     const ok = await form.trigger(["email", "shippingAddress"]);
@@ -120,33 +163,52 @@ export function CheckoutExperience() {
     if (ok) setStep("Payment");
   }
 
+  async function reloadCart() {
+    const bag = await loadGuestCart().catch(() => null);
+    setCart(bag);
+    return bag;
+  }
+
   async function placeOrder() {
-    const values = form.getValues();
+    if (submittingRef.current) return;
     const cartId = guestCartStore.getCartId();
     const guestToken = guestCartStore.getGuestToken();
-    if (!cartId || !guestToken) {
+    if (!cartId || !guestToken || !cart || cart.items.length === 0) {
       toast.error("Your cart is empty");
       return;
     }
+    if (cart.hasUnavailableItems) {
+      toast.error(
+        "Some items are no longer available. Please review your cart.",
+      );
+      router.push("/cart");
+      return;
+    }
+    if (!(await form.trigger())) {
+      const errors = form.formState.errors;
+      setStep(errors.shippingMethodId ? "Shipping" : "Information");
+      toast.error("Please check your details");
+      return;
+    }
 
+    submittingRef.current = true;
     setPlacing(true);
+    const values = form.getValues();
     try {
-      const accessToken = tokenStore.getAccessToken();
-      const idempotencyKey =
-        typeof crypto !== "undefined" && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `checkout-${Date.now()}`;
+      const accessToken = await getFreshAccessToken();
+      const idempotencyKey = checkoutKeyFor(cartId);
 
       const body = {
         cartId,
         shippingMethodId: values.shippingMethodId,
         email: values.email,
-        phone: values.phone || values.shippingAddress.phone,
-        customerNote: values.customerNote,
+        phone: values.phone || values.shippingAddress.phone || undefined,
+        customerNote: values.customerNote || undefined,
         shippingAddress: {
           ...values.shippingAddress,
           country: "GB",
         },
+        expectedTotalPence: orderTotal ?? undefined,
       };
 
       const placed = accessToken
@@ -157,6 +219,7 @@ export function CheckoutExperience() {
           })
         : await checkoutApi.guest(body, { guestToken, idempotencyKey });
 
+      clearCheckoutKey(cartId);
       guestCartStore.clear();
       setResult(placed as CheckoutResult);
       if (typeof window !== "undefined" && placed.viewToken) {
@@ -171,12 +234,61 @@ export function CheckoutExperience() {
       toast.success(`Order ${placed.orderNumber} placed`);
       router.push(`/orders/${placed.orderNumber}`);
     } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Unable to place order",
-      );
+      await handleCheckoutError(error);
     } finally {
+      submittingRef.current = false;
       setPlacing(false);
     }
+  }
+
+  async function handleCheckoutError(error: unknown) {
+    if (!(error instanceof ApiError)) {
+      toast.error("Unable to place order. Please try again.");
+      return;
+    }
+    if (error.code === "PRICE_CHANGED") {
+      await reloadCart();
+      toast.error(error.message, { duration: 8000 });
+      return;
+    }
+    if (CART_PROBLEM_CODES.has(error.code)) {
+      await reloadCart();
+      toast.error(error.message, { duration: 8000 });
+      router.push("/cart");
+      return;
+    }
+    if (
+      error.code === "CART_ALREADY_CHECKED_OUT" ||
+      error.code === "NOT_FOUND"
+    ) {
+      // Ordered from another tab, or the cart expired: start fresh.
+      guestCartStore.clear();
+      toast.error(
+        "This cart has already been ordered. Check your email or account for the order.",
+        { duration: 8000 },
+      );
+      router.push("/cart");
+      return;
+    }
+    if (
+      [
+        "PHONE_REQUIRED",
+        "INVALID_PHONE",
+        "INVALID_POSTCODE",
+        "UNSUPPORTED_COUNTRY",
+        "VALIDATION_ERROR",
+      ].includes(error.code)
+    ) {
+      setStep("Information");
+    }
+    if (error.code === "SHIPPING_METHOD_UNAVAILABLE") {
+      setStep("Shipping");
+      catalogApi
+        .listShippingMethods()
+        .then(setMethods)
+        .catch(() => undefined);
+    }
+    toast.error(error.message);
   }
 
   if (loading) {
@@ -316,6 +428,12 @@ export function CheckoutExperience() {
             <p className="text-sm text-muted-foreground">
               UK delivery only. Choose a method for your postcode.
             </p>
+            {methods.length === 0 ? (
+              <p className="text-sm text-destructive">
+                No delivery methods are available right now. Please try again
+                later.
+              </p>
+            ) : null}
             <div className="space-y-3">
               {methods.map((method) => (
                 <label
@@ -381,9 +499,17 @@ export function CheckoutExperience() {
                 </p>
               )}
             </div>
+            {orderTotal != null ? (
+              <p className="text-sm">
+                Amount to transfer:{" "}
+                <strong className="tabular-nums">
+                  {formatGbp(orderTotal)}
+                </strong>
+              </p>
+            ) : null}
             <Button
               type="button"
-              disabled={placing}
+              disabled={placing || Boolean(result) || cart.hasUnavailableItems}
               onClick={() => void placeOrder()}
               className="w-full sm:w-auto"
             >
@@ -416,23 +542,47 @@ export function CheckoutExperience() {
         <ul className="mt-6 space-y-3 text-sm">
           {cart.items.map((item) => (
             <li key={item.id} className="flex justify-between gap-3">
-              <span className="text-muted-foreground">
+              <span
+                className={cn(
+                  "text-muted-foreground",
+                  item.inStock === false && "text-destructive",
+                )}
+              >
                 {item.productName ?? item.sku ?? "Item"} × {item.quantity}
+                {item.inStock === false ? " — unavailable" : ""}
+              </span>
+              <span className="tabular-nums">
+                {formatGbp(
+                  item.lineTotalPence ?? item.unitPricePence * item.quantity,
+                )}
               </span>
             </li>
           ))}
         </ul>
         <div className="mt-8 space-y-2 border-t border-border pt-6 text-sm">
           <div className="flex justify-between">
+            <span className="text-muted-foreground">Subtotal</span>
+            <span className="tabular-nums">
+              {subtotal != null ? formatGbp(subtotal) : "—"}
+            </span>
+          </div>
+          <div className="flex justify-between">
             <span className="text-muted-foreground">Shipping</span>
-            <span>
+            <span className="tabular-nums">
               {selectedShipping
                 ? formatGbp(selectedShipping.pricePence)
                 : "Select method"}
             </span>
           </div>
+          <div className="flex justify-between border-t border-border pt-2 font-semibold">
+            <span>Total</span>
+            <span className="tabular-nums">
+              {orderTotal != null ? formatGbp(orderTotal) : "—"}
+            </span>
+          </div>
           <p className="pt-2 text-xs text-muted-foreground">
-            Item totals are confirmed when the order is placed.
+            Prices include VAT. If anything changes before you order, we will
+            ask you to confirm the new total.
           </p>
         </div>
       </aside>

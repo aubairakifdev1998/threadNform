@@ -46,6 +46,7 @@ export type Order = {
   carrier: string | null;
   trackingNumber: string | null;
   trackingUrl: string | null;
+  refundedPence: number;
   placedAt: Date;
 };
 
@@ -65,6 +66,36 @@ export type OrderItem = {
   vatPence: number;
   netPence: number;
   lineGrossPence: number;
+  quantityShipped: number;
+  quantityCancelled: number;
+  quantityReturned: number;
+};
+
+export type Shipment = {
+  id: string;
+  orderId: string;
+  carrier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  note: string | null;
+  shippedAt: Date;
+  items: Array<{ orderItemId: string; quantity: number }>;
+};
+
+export type Refund = {
+  id: string;
+  orderId: string;
+  paymentId: string;
+  amountPence: number;
+  reason: string;
+  reference: string | null;
+  createdAt: Date;
+  items: Array<{
+    orderItemId: string;
+    quantityCancelled: number;
+    quantityReturned: number;
+    restocked: boolean;
+  }>;
 };
 
 export type Payment = {
@@ -158,8 +189,12 @@ export interface CommerceRepository {
     statusCode: number;
     ttlHours: number;
   }): Promise<void>;
-  createOrder(input: CreateOrderInput): Promise<{ order: Order; payment: Payment }>;
+  createOrder(
+    input: CreateOrderInput,
+  ): Promise<{ order: Order; payment: Payment }>;
   getOrderById(id: string): Promise<Order | null>;
+  /** Row-locks the order for the current transaction (serialises admin actions). */
+  lockOrder(id: string): Promise<Order | null>;
   getOrderByNumber(orderNumber: string): Promise<Order | null>;
   listOrders(params: {
     page: number;
@@ -200,6 +235,12 @@ export interface CommerceRepository {
     customerNote?: string | null;
   }): Promise<PaymentProof>;
   listPaymentProofs(paymentId: string): Promise<PaymentProof[]>;
+  findPaymentProofByPath(
+    paymentId: string,
+    storagePath: string,
+  ): Promise<PaymentProof | null>;
+  /** Unpaid orders (no proof uploaded) placed before `before`. */
+  listExpiredUnpaidOrderIds(before: Date, limit: number): Promise<string[]>;
   listPaymentQueue(params: {
     page: number;
     pageSize: number;
@@ -232,6 +273,40 @@ export interface CommerceRepository {
     customerNote?: string | null;
     items: Array<{ orderItemId: string; quantity: number; reason?: string }>;
   }): Promise<{ id: string; status: string }>;
-  getDashboardStats(): Promise<Record<string, number>>;
+  getDashboardStats(options: {
+    lowStockThreshold: number;
+  }): Promise<Record<string, number>>;
   purgeOrderCascade(orderId: string): Promise<void>;
+
+  /**
+   * Adds to an item's shipped / cancelled / returned counters. Throws a
+   * conflict if that would exceed the ordered (or shipped) quantity, so
+   * concurrent requests can never over-ship or over-refund.
+   */
+  adjustItemFulfilment(
+    orderItemId: string,
+    delta: { shipped?: number; cancelled?: number; returned?: number },
+  ): Promise<OrderItem>;
+  createShipment(input: {
+    orderId: string;
+    carrier?: string | null;
+    trackingNumber?: string | null;
+    trackingUrl?: string | null;
+    note?: string | null;
+    createdBy?: string | null;
+    items: Array<{ orderItemId: string; quantity: number }>;
+  }): Promise<Shipment>;
+  listShipments(orderId: string): Promise<Shipment[]>;
+  /** Adds to orders.refunded_pence; conflict if it would exceed the total. */
+  addRefundedAmount(orderId: string, amountPence: number): Promise<Order>;
+  createRefund(input: {
+    orderId: string;
+    paymentId: string;
+    amountPence: number;
+    reason: string;
+    reference?: string | null;
+    createdBy?: string | null;
+    items: Refund['items'];
+  }): Promise<Refund>;
+  listRefunds(orderId: string): Promise<Refund[]>;
 }

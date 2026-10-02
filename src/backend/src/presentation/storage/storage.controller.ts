@@ -32,6 +32,7 @@ import type { User } from '../../domain/entities/user.entity.js';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard.js';
 import { assertSafeStoragePath } from '../commerce/order-access.js';
 import { DeleteFilesDto } from './dto/delete-files.dto.js';
+import { RateLimit } from '../common/rate-limit/rate-limit.decorator.js';
 import { GetFileUrlDto } from './dto/get-file-url.dto.js';
 
 const PROOF_MIME = new Set([
@@ -40,6 +41,28 @@ const PROOF_MIME = new Set([
   'image/webp',
   'application/pdf',
 ]);
+
+/** The declared type is client-controlled; check the file's leading bytes too. */
+function matchesSignature(file: Express.Multer.File): boolean {
+  const head = file.buffer.subarray(0, 12);
+  switch (file.mimetype) {
+    case 'image/jpeg':
+      return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+    case 'image/png':
+      return head
+        .subarray(0, 8)
+        .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    case 'image/webp':
+      return (
+        head.subarray(0, 4).toString('ascii') === 'RIFF' &&
+        head.subarray(8, 12).toString('ascii') === 'WEBP'
+      );
+    case 'application/pdf':
+      return head.subarray(0, 5).toString('ascii') === '%PDF-';
+    default:
+      return false;
+  }
+}
 
 @Controller('storage')
 @UseGuards(SupabaseAuthGuard)
@@ -59,7 +82,8 @@ export class StorageController {
 
   private proofsBucket() {
     return (
-      this.config.get<string>('supabase.paymentProofsBucket') ?? 'payment-proofs'
+      this.config.get<string>('supabase.paymentProofsBucket') ??
+      'payment-proofs'
     );
   }
 
@@ -101,6 +125,7 @@ export class StorageController {
   }
 
   @Post('upload')
+  @RateLimit({ name: 'upload', max: 30, windowSeconds: 600 })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -133,9 +158,9 @@ export class StorageController {
       if (file.size > max) {
         throw new ValidationException('File too large', 'PAYLOAD_TOO_LARGE');
       }
-      if (!PROOF_MIME.has(file.mimetype)) {
+      if (!PROOF_MIME.has(file.mimetype) || !matchesSignature(file)) {
         throw new ValidationException(
-          'Unsupported media type',
+          'Upload a JPG, PNG, WEBP or PDF file',
           'UNSUPPORTED_MEDIA_TYPE',
         );
       }

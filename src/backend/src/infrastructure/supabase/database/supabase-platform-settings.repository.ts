@@ -1,6 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { asc, eq } from 'drizzle-orm';
 import type {
+  CommercePolicy,
+  InventoryPolicy,
   PlatformSetting,
   PlatformSettingsRepository,
 } from '../../../domain/repositories/platform-settings.repository.js';
@@ -38,6 +40,7 @@ const DEFAULTS: Record<
       reserveOnCart: true,
       allowOversell: false,
       lowStockThreshold: 5,
+      cartHoldMinutes: 120,
       defaultWarehouseCode: 'UK-MAIN',
     },
   },
@@ -70,9 +73,7 @@ const DEFAULTS: Record<
 };
 
 @Injectable()
-export class SupabasePlatformSettingsRepository
-  implements PlatformSettingsRepository
-{
+export class SupabasePlatformSettingsRepository implements PlatformSettingsRepository {
   private readonly logger = new Logger(SupabasePlatformSettingsRepository.name);
   private tableMissing = false;
   private memory = new Map<string, PlatformSetting>();
@@ -184,18 +185,47 @@ export class SupabasePlatformSettingsRepository
     }
   }
 
-  async getInventoryPolicy(): Promise<{
-    reserveOnCart: boolean;
-    allowOversell: boolean;
-    lowStockThreshold: number;
-  }> {
-    const row = await this.get('inventory');
-    const value = row?.value ?? DEFAULTS.inventory.value;
+  async getInventoryPolicy(): Promise<InventoryPolicy> {
+    const value = await this.valueWithDefaults('inventory');
     return {
       reserveOnCart: value.reserveOnCart !== false,
       allowOversell: value.allowOversell === true,
-      lowStockThreshold: Number(value.lowStockThreshold ?? 5),
+      lowStockThreshold: nonNegativeInt(value.lowStockThreshold, 5),
+      cartHoldMinutes: nonNegativeInt(value.cartHoldMinutes, 120),
     };
+  }
+
+  async getCommercePolicy(): Promise<CommercePolicy> {
+    const [storefront, checkout, payments, security] = await Promise.all([
+      this.valueWithDefaults('storefront'),
+      this.valueWithDefaults('checkout'),
+      this.valueWithDefaults('payments'),
+      this.valueWithDefaults('security'),
+    ]);
+    return {
+      maintenanceMode: storefront.maintenanceMode === true,
+      guestCheckoutEnabled: checkout.guestCheckoutEnabled !== false,
+      requirePhone: checkout.requirePhone === true,
+      minOrderPence: nonNegativeInt(checkout.minOrderPence, 0),
+      allowNotes: checkout.allowNotes !== false,
+      manualBankTransferEnabled: payments.manualBankTransferEnabled !== false,
+      autoExpirePendingHours: nonNegativeInt(
+        payments.autoExpirePendingHours,
+        72,
+      ),
+      blockNewRegistrations: security.blockNewRegistrations === true,
+    };
+  }
+
+  getDefaults(key: string): Record<string, unknown> | null {
+    return DEFAULTS[key] ? { ...DEFAULTS[key].value } : null;
+  }
+
+  private async valueWithDefaults(
+    key: string,
+  ): Promise<Record<string, unknown>> {
+    const row = await this.get(key);
+    return { ...(DEFAULTS[key]?.value ?? {}), ...(row?.value ?? {}) };
   }
 
   private markMissing(error: unknown) {
@@ -227,4 +257,9 @@ export class SupabasePlatformSettingsRepository
       updatedBy: row.updatedBy ?? null,
     };
   }
+}
+
+function nonNegativeInt(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
 }

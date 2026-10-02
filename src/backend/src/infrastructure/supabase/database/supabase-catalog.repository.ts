@@ -349,9 +349,7 @@ export class SupabaseCatalogRepository implements CatalogRepository {
         .select({ productId: productVariants.productId })
         .from(productVariants)
         .where(inArray(productVariants.id, variantIds));
-      idFilters.push(
-        Array.from(new Set(variants.map((row) => row.productId))),
-      );
+      idFilters.push(Array.from(new Set(variants.map((row) => row.productId))));
     }
 
     if (params.inStock === true) {
@@ -377,9 +375,7 @@ export class SupabaseCatalogRepository implements CatalogRepository {
             inArray(productVariants.id, availableVariantIds),
           ),
         );
-      idFilters.push(
-        Array.from(new Set(variants.map((row) => row.productId))),
-      );
+      idFilters.push(Array.from(new Set(variants.map((row) => row.productId))));
     }
 
     if (
@@ -441,10 +437,7 @@ export class SupabaseCatalogRepository implements CatalogRepository {
         .orderBy(desc(products.createdAt))
         .limit(params.pageSize)
         .offset(from),
-      this.db
-        .select({ value: count() })
-        .from(products)
-        .where(whereClause),
+      this.db.select({ value: count() }).from(products).where(whereClause),
     ]);
 
     return {
@@ -524,7 +517,8 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     const priceMap = new Map<string, number>();
     const hasProductLevelPrice = new Set<string>();
     for (const row of priceRows) {
-      const sale = row.salePricePence == null ? null : Number(row.salePricePence);
+      const sale =
+        row.salePricePence == null ? null : Number(row.salePricePence);
       const base = Number(row.basePricePence);
       const amount = sale ?? base;
       const productId = row.productId;
@@ -751,13 +745,15 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     };
     if (input.name !== undefined) payload.name = input.name;
     if (input.slug !== undefined) payload.slug = input.slug;
-    if (input.description !== undefined) payload.description = input.description;
+    if (input.description !== undefined)
+      payload.description = input.description;
     if (input.shortDescription !== undefined)
       payload.shortDescription = input.shortDescription;
     if (input.departmentId !== undefined)
       payload.departmentId = input.departmentId;
     if (input.categoryId !== undefined) payload.categoryId = input.categoryId;
-    if (input.productType !== undefined) payload.productType = input.productType;
+    if (input.productType !== undefined)
+      payload.productType = input.productType;
     if (input.subcategoryId !== undefined)
       payload.subcategoryId = input.subcategoryId;
     if (input.brandId !== undefined) payload.brandId = input.brandId;
@@ -959,7 +955,49 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     vatRateId: string;
     vatInclusive?: boolean;
   }): Promise<ProductPrice> {
-    // Matches prior Supabase behavior (plain insert, not conflict upsert).
+    const scope = and(
+      eq(productPrices.productId, input.productId),
+      input.variantId
+        ? eq(productPrices.variantId, input.variantId)
+        : isNull(productPrices.variantId),
+    );
+    const [existing] = await this.db
+      .select()
+      .from(productPrices)
+      .where(scope)
+      .limit(1);
+
+    if (existing) {
+      // Keep an existing sale price only while it is still a discount.
+      const salePricePence =
+        input.salePricePence !== undefined
+          ? input.salePricePence
+          : existing.salePricePence != null &&
+              existing.salePricePence <= input.basePricePence
+            ? existing.salePricePence
+            : null;
+      const [row] = await this.db
+        .update(productPrices)
+        .set({
+          basePricePence: input.basePricePence,
+          salePricePence,
+          compareAtPence:
+            input.compareAtPence !== undefined
+              ? input.compareAtPence
+              : existing.compareAtPence,
+          costPence:
+            input.costPence !== undefined
+              ? input.costPence
+              : existing.costPence,
+          vatRateId: input.vatRateId,
+          vatInclusive: input.vatInclusive ?? existing.vatInclusive,
+          updatedAt: new Date(),
+        })
+        .where(eq(productPrices.id, existing.id))
+        .returning();
+      return this.mapPrice(row);
+    }
+
     const [row] = await this.db
       .insert(productPrices)
       .values({
@@ -985,7 +1023,9 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     return row ? { id: row.id, rateBps: row.rateBps } : null;
   }
 
-  async getVatRate(id: string): Promise<{ id: string; rateBps: number } | null> {
+  async getVatRate(
+    id: string,
+  ): Promise<{ id: string; rateBps: number } | null> {
     const [row] = await this.db
       .select({ id: vatRates.id, rateBps: vatRates.rateBps })
       .from(vatRates)
@@ -1192,9 +1232,7 @@ export class SupabaseCatalogRepository implements CatalogRepository {
   }
 
   async deleteSizeSystemValue(id: string): Promise<void> {
-    await this.db
-      .delete(sizeSystemValues)
-      .where(eq(sizeSystemValues.id, id));
+    await this.db.delete(sizeSystemValues).where(eq(sizeSystemValues.id, id));
   }
 
   async createSizeChart(input: {
@@ -1355,7 +1393,9 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     isDefault: row.isDefault,
   });
 
-  private mapPrice = (row: typeof productPrices.$inferSelect): ProductPrice => ({
+  private mapPrice = (
+    row: typeof productPrices.$inferSelect,
+  ): ProductPrice => ({
     id: row.id,
     productId: row.productId,
     variantId: row.variantId ?? null,

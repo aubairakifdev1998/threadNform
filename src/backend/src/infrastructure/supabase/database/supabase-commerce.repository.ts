@@ -8,13 +8,18 @@ import {
   gte,
   ilike,
   inArray,
+  lt,
+  ne,
   or,
   sql,
   type SQL,
 } from 'drizzle-orm';
 import type { OrderStatus } from '../../../domain/orders/order-status.js';
 import type { PaymentStatus } from '../../../domain/payments/payment-status.js';
-import { ValidationException, ConflictException } from '../../../domain/exceptions/domain.exception.js';
+import {
+  ValidationException,
+  ConflictException,
+} from '../../../domain/exceptions/domain.exception.js';
 import type {
   BankAccount,
   CommerceRepository,
@@ -23,6 +28,8 @@ import type {
   OrderItem,
   Payment,
   PaymentProof,
+  Refund,
+  Shipment,
   ShippingMethod,
 } from '../../../domain/repositories/commerce.repository.js';
 import {
@@ -40,7 +47,12 @@ import {
   paymentBankAccounts,
   paymentProofs,
   payments,
+  productVariants,
+  refundItems,
+  refunds,
   returnItems,
+  shipmentItems,
+  shipments,
   returnRequests,
   shippingMethods,
   idempotencyKeys,
@@ -123,7 +135,8 @@ export class SupabaseCommerceRepository implements CommerceRepository {
         })
         .where(eq(paymentBankAccounts.id, input.id))
         .returning();
-      if (!row) throw new ValidationException('Bank account not found', 'NOT_FOUND');
+      if (!row)
+        throw new ValidationException('Bank account not found', 'NOT_FOUND');
       return this.mapBank(row);
     }
 
@@ -158,7 +171,8 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       .set({ isActive, updatedAt: new Date() })
       .where(eq(paymentBankAccounts.id, id))
       .returning();
-    if (!row) throw new ValidationException('Bank account not found', 'NOT_FOUND');
+    if (!row)
+      throw new ValidationException('Bank account not found', 'NOT_FOUND');
     return this.mapBank(row);
   }
 
@@ -166,8 +180,9 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     const result = await this.db.execute(
       sql`select public.allocate_order_number(${year}::int) as order_number`,
     );
-    const rows = (result as unknown as { rows?: Array<{ order_number: string }> })
-      .rows;
+    const rows = (
+      result as unknown as { rows?: Array<{ order_number: string }> }
+    ).rows;
     const value = rows?.[0]?.order_number;
     if (!value) throw new Error('Failed to allocate order number');
     return String(value);
@@ -189,7 +204,9 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     const [row] = await this.db
       .select()
       .from(idempotencyKeys)
-      .where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.scope, scope)))
+      .where(
+        and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.scope, scope)),
+      )
       .limit(1);
     if (!row) return null;
     if (row.expiresAt.getTime() < Date.now()) return null;
@@ -345,6 +362,16 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       .from(orders)
       .where(eq(orders.id, id))
       .limit(1);
+    return row ? this.mapOrder(row) : null;
+  }
+
+  async lockOrder(id: string): Promise<Order | null> {
+    const [row] = await this.db
+      .select()
+      .from(orders)
+      .where(eq(orders.id, id))
+      .limit(1)
+      .for('update');
     return row ? this.mapOrder(row) : null;
   }
 
@@ -516,6 +543,11 @@ export class SupabaseCommerceRepository implements CommerceRepository {
         'PAYMENT_STATUS_CONFLICT',
       );
     }
+    // Keep the order's denormalised payment_status in step with the payment.
+    await this.db
+      .update(orders)
+      .set({ paymentStatus: status, updatedAt: new Date() })
+      .where(eq(orders.id, row.orderId));
     return this.mapPayment(row);
   }
 
@@ -563,6 +595,42 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       .where(eq(paymentProofs.paymentId, paymentId))
       .orderBy(desc(paymentProofs.uploadedAt));
     return rows.map((row) => this.mapProof(row));
+  }
+
+  async findPaymentProofByPath(
+    paymentId: string,
+    storagePath: string,
+  ): Promise<PaymentProof | null> {
+    const [row] = await this.db
+      .select()
+      .from(paymentProofs)
+      .where(
+        and(
+          eq(paymentProofs.paymentId, paymentId),
+          eq(paymentProofs.storagePath, storagePath),
+        ),
+      )
+      .limit(1);
+    return row ? this.mapProof(row) : null;
+  }
+
+  async listExpiredUnpaidOrderIds(
+    before: Date,
+    limit: number,
+  ): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.status, 'PENDING_PAYMENT'),
+          eq(orders.paymentStatus, 'PENDING'),
+          lt(orders.placedAt, before),
+        ),
+      )
+      .orderBy(asc(orders.placedAt))
+      .limit(limit);
+    return rows.map((row) => row.id);
   }
 
   async listPaymentQueue(params: {
@@ -712,9 +780,10 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     return { id: row.id, status: row.status };
   }
 
-  async getDashboardStats(): Promise<Record<string, number>> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  async getDashboardStats(options: {
+    lowStockThreshold: number;
+  }): Promise<Record<string, number>> {
+    const today = startOfUkDay(new Date());
 
     const [
       [ordersToday],
@@ -734,13 +803,25 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       this.db
         .select({ value: count() })
         .from(orders)
-        .where(inArray(orders.status, ['CONFIRMED', 'PROCESSING', 'PACKED'])),
+        .where(
+          inArray(orders.status, [
+            'CONFIRMED',
+            'PROCESSING',
+            'PACKED',
+            'PARTIALLY_SHIPPED',
+          ]),
+        ),
       this.db
         .select({
           onHand: inventoryItems.onHand,
           reserved: inventoryItems.reserved,
         })
-        .from(inventoryItems),
+        .from(inventoryItems)
+        .innerJoin(
+          productVariants,
+          eq(inventoryItems.variantId, productVariants.id),
+        )
+        .where(ne(productVariants.status, 'ARCHIVED')),
       this.db
         .select({ grandTotalPence: orders.grandTotalPence })
         .from(orders)
@@ -753,7 +834,7 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     ]);
 
     const lowStockCount = stockRows.filter(
-      (row) => row.onHand - row.reserved <= 5,
+      (row) => row.onHand - row.reserved <= options.lowStockThreshold,
     ).length;
 
     const revenuePence = revenueRows.reduce(
@@ -770,7 +851,217 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     };
   }
 
+  async adjustItemFulfilment(
+    orderItemId: string,
+    delta: { shipped?: number; cancelled?: number; returned?: number },
+  ): Promise<OrderItem> {
+    const shipped = delta.shipped ?? 0;
+    const cancelled = delta.cancelled ?? 0;
+    const returned = delta.returned ?? 0;
+    const [row] = await this.db
+      .update(orderItems)
+      .set({
+        quantityShipped: sql`${orderItems.quantityShipped} + ${shipped}`,
+        quantityCancelled: sql`${orderItems.quantityCancelled} + ${cancelled}`,
+        quantityReturned: sql`${orderItems.quantityReturned} + ${returned}`,
+      })
+      .where(
+        and(
+          eq(orderItems.id, orderItemId),
+          sql`${orderItems.quantityShipped} + ${shipped} + ${orderItems.quantityCancelled} + ${cancelled} <= ${orderItems.quantity}`,
+          sql`${orderItems.quantityReturned} + ${returned} <= ${orderItems.quantityShipped} + ${shipped}`,
+        ),
+      )
+      .returning();
+    if (!row) {
+      throw new ConflictException(
+        'That quantity is no longer available for this item. Refresh and try again.',
+        'ITEM_QUANTITY_CONFLICT',
+        { orderItemId },
+      );
+    }
+    return this.mapOrderItem(row);
+  }
+
+  async createShipment(input: {
+    orderId: string;
+    carrier?: string | null;
+    trackingNumber?: string | null;
+    trackingUrl?: string | null;
+    note?: string | null;
+    createdBy?: string | null;
+    items: Array<{ orderItemId: string; quantity: number }>;
+  }): Promise<Shipment> {
+    const [row] = await this.db
+      .insert(shipments)
+      .values({
+        orderId: input.orderId,
+        carrier: input.carrier ?? null,
+        trackingNumber: input.trackingNumber ?? null,
+        trackingUrl: input.trackingUrl ?? null,
+        note: input.note ?? null,
+        createdBy: input.createdBy ?? null,
+      })
+      .returning();
+    await this.db
+      .insert(shipmentItems)
+      .values(input.items.map((item) => ({ shipmentId: row.id, ...item })));
+    return {
+      id: row.id,
+      orderId: row.orderId,
+      carrier: row.carrier ?? null,
+      trackingNumber: row.trackingNumber ?? null,
+      trackingUrl: row.trackingUrl ?? null,
+      note: row.note ?? null,
+      shippedAt: row.shippedAt,
+      items: input.items,
+    };
+  }
+
+  async listShipments(orderId: string): Promise<Shipment[]> {
+    const rows = await this.db
+      .select()
+      .from(shipments)
+      .where(eq(shipments.orderId, orderId))
+      .orderBy(asc(shipments.shippedAt));
+    if (!rows.length) return [];
+    const items = await this.db
+      .select()
+      .from(shipmentItems)
+      .where(
+        inArray(
+          shipmentItems.shipmentId,
+          rows.map((r) => r.id),
+        ),
+      );
+    return rows.map((row) => ({
+      id: row.id,
+      orderId: row.orderId,
+      carrier: row.carrier ?? null,
+      trackingNumber: row.trackingNumber ?? null,
+      trackingUrl: row.trackingUrl ?? null,
+      note: row.note ?? null,
+      shippedAt: row.shippedAt,
+      items: items
+        .filter((i) => i.shipmentId === row.id)
+        .map((i) => ({ orderItemId: i.orderItemId, quantity: i.quantity })),
+    }));
+  }
+
+  async addRefundedAmount(
+    orderId: string,
+    amountPence: number,
+  ): Promise<Order> {
+    const [row] = await this.db
+      .update(orders)
+      .set({
+        refundedPence: sql`${orders.refundedPence} + ${amountPence}`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(orders.id, orderId),
+          sql`${orders.refundedPence} + ${amountPence} <= ${orders.grandTotalPence}`,
+        ),
+      )
+      .returning();
+    if (!row) {
+      throw new ConflictException(
+        'The refund would exceed the amount paid for this order.',
+        'REFUND_EXCEEDS_PAID',
+      );
+    }
+    return this.mapOrder(row);
+  }
+
+  async createRefund(input: {
+    orderId: string;
+    paymentId: string;
+    amountPence: number;
+    reason: string;
+    reference?: string | null;
+    createdBy?: string | null;
+    items: Refund['items'];
+  }): Promise<Refund> {
+    const [row] = await this.db
+      .insert(refunds)
+      .values({
+        orderId: input.orderId,
+        paymentId: input.paymentId,
+        amountPence: input.amountPence,
+        reason: input.reason,
+        reference: input.reference ?? null,
+        createdBy: input.createdBy ?? null,
+      })
+      .returning();
+    if (input.items.length) {
+      await this.db
+        .insert(refundItems)
+        .values(input.items.map((item) => ({ refundId: row.id, ...item })));
+    }
+    return {
+      id: row.id,
+      orderId: row.orderId,
+      paymentId: row.paymentId,
+      amountPence: row.amountPence,
+      reason: row.reason,
+      reference: row.reference ?? null,
+      createdAt: row.createdAt,
+      items: input.items,
+    };
+  }
+
+  async listRefunds(orderId: string): Promise<Refund[]> {
+    const rows = await this.db
+      .select()
+      .from(refunds)
+      .where(eq(refunds.orderId, orderId))
+      .orderBy(asc(refunds.createdAt));
+    if (!rows.length) return [];
+    const items = await this.db
+      .select()
+      .from(refundItems)
+      .where(
+        inArray(
+          refundItems.refundId,
+          rows.map((r) => r.id),
+        ),
+      );
+    return rows.map((row) => ({
+      id: row.id,
+      orderId: row.orderId,
+      paymentId: row.paymentId,
+      amountPence: row.amountPence,
+      reason: row.reason,
+      reference: row.reference ?? null,
+      createdAt: row.createdAt,
+      items: items
+        .filter((i) => i.refundId === row.id)
+        .map((i) => ({
+          orderItemId: i.orderItemId,
+          quantityCancelled: i.quantityCancelled,
+          quantityReturned: i.quantityReturned,
+          restocked: i.restocked,
+        })),
+    }));
+  }
+
   async purgeOrderCascade(orderId: string): Promise<void> {
+    const shipmentRows = await this.db
+      .select({ id: shipments.id })
+      .from(shipments)
+      .where(eq(shipments.orderId, orderId));
+    if (shipmentRows.length) {
+      await this.db.delete(shipments).where(eq(shipments.orderId, orderId));
+    }
+    const refundRows = await this.db
+      .select({ id: refunds.id })
+      .from(refunds)
+      .where(eq(refunds.orderId, orderId));
+    if (refundRows.length) {
+      await this.db.delete(refunds).where(eq(refunds.orderId, orderId));
+    }
+
     const returns = await this.db
       .select({ id: returnRequests.id })
       .from(returnRequests)
@@ -859,6 +1150,7 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       carrier: row.carrier ?? null,
       trackingNumber: row.trackingNumber ?? null,
       trackingUrl: row.trackingUrl ?? null,
+      refundedPence: row.refundedPence,
       placedAt: row.placedAt,
     };
   }
@@ -881,6 +1173,9 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       vatPence: row.vatPence,
       netPence: row.netPence,
       lineGrossPence: row.lineGrossPence,
+      quantityShipped: row.quantityShipped,
+      quantityCancelled: row.quantityCancelled,
+      quantityReturned: row.quantityReturned,
     };
   }
 
@@ -911,4 +1206,24 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       uploadedAt: row.uploadedAt,
     };
   }
+}
+
+/** Midnight in Europe/London for the given instant (handles GMT/BST). */
+function startOfUkDay(now: Date): Date {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const elapsedMs =
+    ((get('hour') * 60 + get('minute')) * 60 + get('second')) * 1000 +
+    now.getMilliseconds();
+  return new Date(now.getTime() - elapsedMs);
 }

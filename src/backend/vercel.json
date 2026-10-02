@@ -4,7 +4,12 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "outputDirectory": "public",
-  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api"
+    }
+  ],
   "functions": {
     "api/index.js": {
       "maxDuration": 60,
@@ -16,8 +21,17 @@
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "Access-Control-Allow-Credentials", "value": "true" }
+        {
+          "key": "Access-Control-Allow-Credentials",
+          "value": "true"
+        }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/cron/release-expired-holds",
+      "schedule": "0 3 * * *"
     }
   ]
 }

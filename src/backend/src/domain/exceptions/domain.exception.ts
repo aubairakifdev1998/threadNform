@@ -12,7 +12,9 @@ export class DomainException extends Error {
 export class NotFoundException extends DomainException {
   constructor(resource: string, id?: string) {
     super(
-      id ? `${resource} with id "${id}" was not found` : `${resource} was not found`,
+      id
+        ? `${resource} with id "${id}" was not found`
+        : `${resource} was not found`,
       'NOT_FOUND',
       id ? { resource, id } : { resource },
     );
@@ -28,14 +30,18 @@ export class UnauthorizedException extends DomainException {
 }
 
 export class ForbiddenException extends DomainException {
-  constructor(message = 'Forbidden') {
-    super(message, 'FORBIDDEN');
+  constructor(message = 'Forbidden', code = 'FORBIDDEN') {
+    super(message, code);
     this.name = 'ForbiddenException';
   }
 }
 
 export class ConflictException extends DomainException {
-  constructor(message: string, code = 'CONFLICT', details: Record<string, unknown> = {}) {
+  constructor(
+    message: string,
+    code = 'CONFLICT',
+    details: Record<string, unknown> = {},
+  ) {
     super(message, code, details);
     this.name = 'ConflictException';
   }
@@ -66,8 +72,23 @@ export class InsufficientStockException extends DomainException {
 }
 
 export class InvalidTransitionException extends DomainException {
-  constructor(message: string, code: string, details: Record<string, unknown> = {}) {
+  constructor(
+    message: string,
+    code: string,
+    details: Record<string, unknown> = {},
+  ) {
     super(message, code, details);
     this.name = 'InvalidTransitionException';
+  }
+}
+
+export class TooManyRequestsException extends DomainException {
+  constructor(public readonly retryAfterSeconds: number) {
+    super(
+      'Too many requests. Please wait a moment and try again.',
+      'RATE_LIMITED',
+      { retryAfterSeconds },
+    );
+    this.name = 'TooManyRequestsException';
   }
 }

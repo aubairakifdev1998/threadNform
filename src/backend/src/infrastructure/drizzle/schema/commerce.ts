@@ -40,8 +40,12 @@ export const customerAddresses = pgTable('customer_addresses', {
   country: char('country', { length: 2 }).notNull().default('GB'),
   phone: text('phone'),
   isDefaultShipping: boolean('is_default_shipping').notNull().default(false),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const carts = pgTable('carts', {
@@ -52,8 +56,12 @@ export const carts = pgTable('carts', {
   guestTokenHash: text('guest_token_hash').unique(),
   status: cartStatusEnum('status').notNull().default('ACTIVE'),
   currency: char('currency', { length: 3 }).notNull().default('GBP'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const cartItems = pgTable(
@@ -67,8 +75,12 @@ export const cartItems = pgTable(
       .notNull()
       .references(() => productVariants.id),
     quantity: integer('quantity').notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (t) => [unique().on(t.cartId, t.variantId)],
 );
@@ -85,9 +97,16 @@ export const shippingMethods = pgTable('shipping_methods', {
   etaMinDays: integer('eta_min_days').notNull().default(2),
   etaMaxDays: integer('eta_max_days').notNull().default(5),
   isActive: boolean('is_active').notNull().default(true),
-  eligibleCountries: text('eligible_countries').array().notNull().default(['GB']),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  eligibleCountries: text('eligible_countries')
+    .array()
+    .notNull()
+    .default(['GB']),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const orders = pgTable('orders', {
@@ -97,27 +116,40 @@ export const orders = pgTable('orders', {
   email: text('email').notNull(),
   phone: text('phone'),
   status: orderStatusEnum('status').notNull().default('PENDING_PAYMENT'),
-  paymentStatus: paymentStatusEnum('payment_status').notNull().default('PENDING'),
+  paymentStatus: paymentStatusEnum('payment_status')
+    .notNull()
+    .default('PENDING'),
   shippingStatus: shippingStatusEnum('shipping_status')
     .notNull()
     .default('NOT_SHIPPED'),
   currency: char('currency', { length: 3 }).notNull().default('GBP'),
   subtotalPence: bigint('subtotal_pence', { mode: 'number' }).notNull(),
-  discountPence: bigint('discount_pence', { mode: 'number' }).notNull().default(0),
+  discountPence: bigint('discount_pence', { mode: 'number' })
+    .notNull()
+    .default(0),
   netPence: bigint('net_pence', { mode: 'number' }).notNull(),
   vatPence: bigint('vat_pence', { mode: 'number' }).notNull(),
   shippingPence: bigint('shipping_pence', { mode: 'number' }).notNull(),
   grandTotalPence: bigint('grand_total_pence', { mode: 'number' }).notNull(),
-  shippingMethodSnapshot: jsonb('shipping_method_snapshot').notNull().default({}),
+  shippingMethodSnapshot: jsonb('shipping_method_snapshot')
+    .notNull()
+    .default({}),
   vatSnapshot: jsonb('vat_snapshot').notNull().default({}),
   carrier: text('carrier'),
   trackingNumber: text('tracking_number'),
   trackingUrl: text('tracking_url'),
   cancellationReason: text('cancellation_reason'),
+  refundedPence: bigint('refunded_pence', { mode: 'number' })
+    .notNull()
+    .default(0),
   idempotencyKey: text('idempotency_key').unique(),
   customerNote: text('customer_note'),
-  placedAt: timestamp('placed_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  placedAt: timestamp('placed_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const orderItems = pgTable('order_items', {
@@ -137,11 +169,16 @@ export const orderItems = pgTable('order_items', {
   attributesSnapshot: jsonb('attributes_snapshot').notNull().default({}),
   unitGrossPence: bigint('unit_gross_pence', { mode: 'number' }).notNull(),
   quantity: integer('quantity').notNull(),
-  discountPence: bigint('discount_pence', { mode: 'number' }).notNull().default(0),
+  discountPence: bigint('discount_pence', { mode: 'number' })
+    .notNull()
+    .default(0),
   vatRateBps: integer('vat_rate_bps').notNull(),
   vatPence: bigint('vat_pence', { mode: 'number' }).notNull(),
   netPence: bigint('net_pence', { mode: 'number' }).notNull(),
   lineGrossPence: bigint('line_gross_pence', { mode: 'number' }).notNull(),
+  quantityShipped: integer('quantity_shipped').notNull().default(0),
+  quantityCancelled: integer('quantity_cancelled').notNull().default(0),
+  quantityReturned: integer('quantity_returned').notNull().default(0),
 });
 
 export const orderAddresses = pgTable(
@@ -175,8 +212,12 @@ export const orderStatusHistory = pgTable('order_status_history', {
   actorType: actorTypeEnum('actor_type').notNull(),
   actorId: uuid('actor_id'),
   note: text('note'),
-  visibility: timelineVisibilityEnum('visibility').notNull().default('CUSTOMER'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  visibility: timelineVisibilityEnum('visibility')
+    .notNull()
+    .default('CUSTOMER'),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const paymentBankAccounts = pgTable('payment_bank_accounts', {
@@ -190,8 +231,12 @@ export const paymentBankAccounts = pgTable('payment_bank_accounts', {
     .notNull()
     .default('Use your order number as the payment reference.'),
   isActive: boolean('is_active').notNull().default(true),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const payments = pgTable('payments', {
@@ -207,8 +252,12 @@ export const payments = pgTable('payments', {
   currency: char('currency', { length: 3 }).notNull().default('GBP'),
   bankAccountSnapshot: jsonb('bank_account_snapshot').notNull().default({}),
   adminNote: text('admin_note'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const paymentProofs = pgTable('payment_proofs', {
@@ -226,7 +275,9 @@ export const paymentProofs = pgTable('payment_proofs', {
   reviewedBy: uuid('reviewed_by').references(() => adminUsers.id),
   reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
   rejectionReason: text('rejection_reason'),
-  uploadedAt: timestamp('uploaded_at', { withTimezone: true }).notNull().defaultNow(),
+  uploadedAt: timestamp('uploaded_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const returnRequests = pgTable('return_requests', {
@@ -238,8 +289,12 @@ export const returnRequests = pgTable('return_requests', {
   reason: text('reason'),
   customerNote: text('customer_note'),
   adminNote: text('admin_note'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const returnItems = pgTable('return_items', {
@@ -252,4 +307,77 @@ export const returnItems = pgTable('return_items', {
     .references(() => orderItems.id),
   quantity: integer('quantity').notNull(),
   reason: text('reason'),
+});
+
+export const shipments = pgTable('shipments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id),
+  carrier: text('carrier'),
+  trackingNumber: text('tracking_number'),
+  trackingUrl: text('tracking_url'),
+  note: text('note'),
+  createdBy: uuid('created_by'),
+  shippedAt: timestamp('shipped_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const shipmentItems = pgTable('shipment_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  shipmentId: uuid('shipment_id')
+    .notNull()
+    .references(() => shipments.id, { onDelete: 'cascade' }),
+  orderItemId: uuid('order_item_id')
+    .notNull()
+    .references(() => orderItems.id),
+  quantity: integer('quantity').notNull(),
+});
+
+export const refunds = pgTable('refunds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id),
+  paymentId: uuid('payment_id')
+    .notNull()
+    .references(() => payments.id),
+  amountPence: bigint('amount_pence', { mode: 'number' }).notNull(),
+  reason: text('reason').notNull(),
+  reference: text('reference'),
+  createdBy: uuid('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const refundItems = pgTable('refund_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  refundId: uuid('refund_id')
+    .notNull()
+    .references(() => refunds.id, { onDelete: 'cascade' }),
+  orderItemId: uuid('order_item_id')
+    .notNull()
+    .references(() => orderItems.id),
+  quantityCancelled: integer('quantity_cancelled').notNull().default(0),
+  quantityReturned: integer('quantity_returned').notNull().default(0),
+  restocked: boolean('restocked').notNull().default(false),
+});
+
+export const notificationOutbox = pgTable('notification_outbox', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  event: text('event').notNull(),
+  recipient: text('recipient').notNull(),
+  payload: jsonb('payload').notNull().default({}),
+  status: text('status').notNull().default('PENDING'),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
 });

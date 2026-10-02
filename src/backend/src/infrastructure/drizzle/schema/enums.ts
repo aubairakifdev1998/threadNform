@@ -36,6 +36,7 @@ export const orderStatusEnum = pgEnum('order_status', [
   'CONFIRMED',
   'PROCESSING',
   'PACKED',
+  'PARTIALLY_SHIPPED',
   'SHIPPED',
   'DELIVERED',
   'CANCELLED',
@@ -49,6 +50,7 @@ export const paymentStatusEnum = pgEnum('payment_status', [
   'PROOF_SUBMITTED',
   'UNDER_REVIEW',
   'VERIFIED',
+  'PARTIALLY_REFUNDED',
   'REJECTED',
   'REFUND_PENDING',
   'REFUNDED',
@@ -74,6 +76,7 @@ export const mediaTypeEnum = pgEnum('media_type', ['IMAGE', 'VIDEO']);
 export const shippingStatusEnum = pgEnum('shipping_status', [
   'NOT_SHIPPED',
   'READY_TO_SHIP',
+  'PARTIALLY_SHIPPED',
   'SHIPPED',
   'DELIVERED',
 ]);

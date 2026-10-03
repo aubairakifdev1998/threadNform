@@ -5,6 +5,7 @@ import {
   Get,
   Inject,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -36,7 +37,10 @@ import {
   type CustomerRepository,
 } from '../../domain/repositories/customer.repository.js';
 import { assertUkShippingAddress } from '../../domain/shared/uk-address.js';
-import { ValidationException } from '../../domain/exceptions/domain.exception.js';
+import {
+  NotFoundException,
+  ValidationException,
+} from '../../domain/exceptions/domain.exception.js';
 import type { User } from '../../domain/entities/user.entity.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard.js';
@@ -240,9 +244,19 @@ export class CatalogExtrasController {
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.CATALOG_WRITE)
   async assignProductAttribute(
-    @Param('productId') productId: string,
+    @Param('productId', new ParseUUIDPipe()) productId: string,
     @Body() dto: AssignProductAttributeDto,
   ) {
+    const [product, attributes] = await Promise.all([
+      this.catalog.getProductById(productId),
+      this.catalog.listAttributes(),
+    ]);
+    if (!product || product.status === 'ARCHIVED') {
+      throw new NotFoundException('Product');
+    }
+    if (!attributes.some((a) => a.id === dto.attributeId)) {
+      throw new NotFoundException('Attribute');
+    }
     await this.catalog.assignProductAttribute({
       productId,
       attributeId: dto.attributeId,

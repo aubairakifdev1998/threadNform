@@ -492,7 +492,7 @@ export class CommerceController {
   async getProduct(@Param('slug') slug: string) {
     const product = await this.catalog.getProductBySlug(slug);
     if (!product || product.status !== 'ACTIVE') {
-      throw new ValidationException('Product not found', 'NOT_FOUND');
+      throw new NotFoundException('Product');
     }
     const variants = await this.catalog.listVariants(product.id);
     let price = await this.catalog.getPriceForProduct(product.id);
@@ -1163,7 +1163,7 @@ export class CommerceController {
       const categories = await this.catalog.listCategories();
       const category = categories.find((c) => c.id === dto.categoryId);
       if (!category) {
-        throw new ValidationException('Category not found', 'NOT_FOUND');
+        throw new NotFoundException('Category');
       }
       if (!category.isActive) {
         throw new ValidationException('Category is inactive');
@@ -1236,7 +1236,7 @@ export class CommerceController {
           );
         }
         if (!combo.size && !combo.color) {
-          skuParts.push(dto.sku?.trim() || 'DEFAULT');
+          skuParts.push(dto.sku?.trim().toUpperCase() || 'DEFAULT');
         }
         const sku = skuParts.join('-');
         const fingerprint = [
@@ -1294,7 +1294,7 @@ export class CommerceController {
   ) {
     const product = await this.catalog.getProductById(productId);
     if (!product || product.status === 'ARCHIVED') {
-      throw new ValidationException('Product not found', 'NOT_FOUND');
+      throw new NotFoundException('Product');
     }
 
     const sku = dto.sku.trim().toUpperCase();
@@ -1391,7 +1391,7 @@ export class CommerceController {
   async adminListVariants(@Param('productId') productId: string) {
     const product = await this.catalog.getProductById(productId);
     if (!product)
-      throw new ValidationException('Product not found', 'NOT_FOUND');
+      throw new NotFoundException('Product');
     const variants = await this.catalog.listVariants(productId);
     const warehouse = await this.inventory.getDefaultWarehouse();
     return Promise.all(
@@ -1435,7 +1435,7 @@ export class CommerceController {
   async adminGetProduct(@Param('id') id: string) {
     const product = await this.catalog.getProductById(id);
     if (!product)
-      throw new ValidationException('Product not found', 'NOT_FOUND');
+      throw new NotFoundException('Product');
     const variants = await this.catalog.listVariants(id);
     const warehouse = await this.inventory.getDefaultWarehouse();
     const productPrice = await this.catalog.getPriceForProduct(id);
@@ -1481,14 +1481,14 @@ export class CommerceController {
   ) {
     const before = await this.catalog.getProductById(id);
     if (!before)
-      throw new ValidationException('Product not found', 'NOT_FOUND');
+      throw new NotFoundException('Product');
 
     let departmentId = body.departmentId;
     if (body.categoryId) {
       const categories = await this.catalog.listCategories();
       const category = categories.find((c) => c.id === body.categoryId);
       if (!category) {
-        throw new ValidationException('Category not found', 'NOT_FOUND');
+        throw new NotFoundException('Category');
       }
       if (departmentId === undefined) {
         departmentId = category.departmentId;
@@ -1527,7 +1527,7 @@ export class CommerceController {
   ) {
     const before = await this.catalog.getProductById(id);
     if (!before)
-      throw new ValidationException('Product not found', 'NOT_FOUND');
+      throw new NotFoundException('Product');
     const variants = await this.catalog.listVariants(id);
     await this.assertNoReservedStock(variants.map((v) => v.id));
     return this.uow.run(async () => {
@@ -1589,10 +1589,21 @@ export class CommerceController {
   ) {
     const variant = await this.catalog.getVariantById(variantId);
     if (!variant || variant.productId !== productId) {
-      throw new ValidationException('Variant not found', 'NOT_FOUND');
+      throw new NotFoundException('Variant');
+    }
+    const sku = dto.sku === undefined ? undefined : dto.sku.trim().toUpperCase();
+    if (sku === '') throw new ValidationException('SKU is required');
+    if (sku && sku !== variant.sku) {
+      const clash = await this.catalog.getVariantBySku(sku);
+      if (clash) {
+        throw new ValidationException(
+          `SKU "${sku}" already exists`,
+          'DUPLICATE_SKU',
+        );
+      }
     }
     const updated = await this.catalog.updateVariant(variantId, {
-      sku: dto.sku,
+      sku,
       status: dto.status,
       isDefault: dto.isDefault,
     });
@@ -1619,7 +1630,7 @@ export class CommerceController {
   ) {
     const variant = await this.catalog.getVariantById(variantId);
     if (!variant || variant.productId !== productId) {
-      throw new ValidationException('Variant not found', 'NOT_FOUND');
+      throw new NotFoundException('Variant');
     }
     await this.assertNoReservedStock([variantId]);
     return this.uow.run(async () => {
@@ -1668,7 +1679,7 @@ export class CommerceController {
   ) {
     const variant = await this.catalog.getVariantById(dto.variantId);
     if (!variant || variant.status === 'ARCHIVED') {
-      throw new ValidationException('Variant not found', 'NOT_FOUND');
+      throw new NotFoundException('Variant');
     }
     const product = await this.catalog.getProductById(variant.productId);
     if (!product || product.status === 'ARCHIVED') {

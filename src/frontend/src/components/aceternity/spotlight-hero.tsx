@@ -69,7 +69,7 @@ export function BackgroundBeams({ className }: { className?: string }) {
       )}
       aria-hidden
     >
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,oklch(0.9_0.01_95)_1px,transparent_1px),linear-gradient(to_bottom,oklch(0.9_0.01_95)_1px,transparent_1px)] bg-size-[48px_48px] opacity-40 [mask-image:radial-gradient(ellipse_at_center,black_20%,transparent_75%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,oklch(0.9_0_0)_1px,transparent_1px),linear-gradient(to_bottom,oklch(0.9_0_0)_1px,transparent_1px)] bg-size-[48px_48px] opacity-40 [mask-image:radial-gradient(ellipse_at_center,black_20%,transparent_75%)]" />
       {!reduceMotion &&
         Array.from({ length: 6 }).map((_, i) => (
           <span
@@ -158,7 +158,7 @@ export function MovingBorderButton({
     >
       {!reduceMotion && (
         <span
-          className="absolute inset-[-100%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_90deg_at_50%_50%,transparent_0%,oklch(0.35_0.02_265)_50%,transparent_100%)] opacity-70"
+          className="absolute inset-[-100%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_90deg_at_50%_50%,transparent_0%,oklch(0.35_0_0)_50%,transparent_100%)] opacity-70"
           aria-hidden
         />
       )}
@@ -200,7 +200,7 @@ export function FocusCards({
           className={cn(
             "transition duration-300",
             hovered !== null && hovered !== i
-              ? "opacity-45 blur-[1px]"
+              ? "opacity-70 motion-reduce:opacity-100"
               : "opacity-100",
           )}
         >
@@ -363,7 +363,7 @@ export function HeroSpotlight({
           <div className="mt-8 flex w-full flex-col gap-3 sm:mt-10 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
             <Link
               href={primaryHref}
-              className="inline-flex h-12 w-full items-center justify-center gap-3 bg-foreground px-7 text-sm font-medium tracking-wide text-background transition hover:opacity-90 sm:w-auto"
+              className="inline-flex h-12 w-full items-center justify-center gap-3 bg-primary px-7 text-sm font-medium tracking-wide text-primary-foreground shadow-e2 transition hover:bg-[color-mix(in_oklch,var(--primary),black_8%)] sm:w-auto"
             >
               {primaryLabel}
               <span aria-hidden>→</span>

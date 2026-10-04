@@ -226,6 +226,30 @@ export const ordersApi = {
       cache: "no-store",
     });
   },
+
+  requestReturn(
+    orderNumber: string,
+    body: {
+      reason?: string;
+      customerNote?: string;
+      items: Array<{
+        orderItemId: string;
+        quantity: number;
+        reason?: string;
+      }>;
+    },
+    accessToken: string,
+  ) {
+    return apiRequest<{ id: string; status: string }>(
+      `/orders/${orderNumber}/returns`,
+      {
+        method: "POST",
+        body,
+        accessToken,
+        cache: "no-store",
+      },
+    );
+  },
 };
 
 export const addressesApi = {

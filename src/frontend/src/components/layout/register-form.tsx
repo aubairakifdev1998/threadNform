@@ -96,7 +96,7 @@ export function RegisterForm() {
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
             <Link
               href="/login"
-              className="inline-flex h-10 items-center justify-center bg-foreground px-6 text-sm font-medium text-background"
+              className="inline-flex h-10 items-center justify-center bg-primary px-6 text-sm font-medium text-primary-foreground shadow-e1"
             >
               Go to sign in
             </Link>

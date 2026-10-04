@@ -12,13 +12,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { catalogApi, checkoutApi } from "@/lib/api";
 import { ApiError } from "@/lib/api/client";
-import { loadGuestCart } from "@/lib/cart/guest-cart";
+import { loadGuestCart, notifyCartUpdated } from "@/lib/cart/guest-cart";
 import { getFreshAccessToken } from "@/lib/auth/current-user";
 import { guestCartStore, tokenStore } from "@/lib/auth/session";
-import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { checkoutSchema, type CheckoutValues } from "@/lib/validations";
 import { CheckoutShimmer, Spinner } from "@/components/ui/page-shimmers";
+import { EmptyState } from "@/components/ui/data-states";
+import { PriceDisplay } from "@/components/ui/price";
+import { Section } from "@/components/layout/section";
+import { buttonVariants } from "@/components/ui/button";
+import { ShoppingBag } from "lucide-react";
 import type { Cart, ShippingMethod } from "@/types/api";
 
 const STEPS = ["Information", "Shipping", "Payment"] as const;
@@ -159,8 +163,14 @@ export function CheckoutExperience() {
   }
 
   async function goToPayment() {
+    const infoOk = await form.trigger(["email", "shippingAddress"]);
+    if (!infoOk) {
+      setStep("Information");
+      return;
+    }
     const ok = await form.trigger(["shippingMethodId"]);
     if (ok) setStep("Payment");
+    else setStep("Shipping");
   }
 
   async function reloadCart() {
@@ -221,6 +231,7 @@ export function CheckoutExperience() {
 
       clearCheckoutKey(cartId);
       guestCartStore.clear();
+      notifyCartUpdated(null);
       setResult(placed as CheckoutResult);
       if (typeof window !== "undefined" && placed.viewToken) {
         sessionStorage.setItem(
@@ -263,6 +274,7 @@ export function CheckoutExperience() {
     ) {
       // Ordered from another tab, or the cart expired: start fresh.
       guestCartStore.clear();
+      notifyCartUpdated(null);
       toast.error(
         "This cart has already been ordered. Check your email or account for the order.",
         { duration: 8000 },
@@ -297,18 +309,20 @@ export function CheckoutExperience() {
 
   if (!cart || itemCount === 0) {
     return (
-      <div className="mx-auto max-w-3xl px-4 py-16 sm:px-6 lg:px-8">
+      <Section width="narrow" space="loose">
         <h1 className="heading-display text-4xl">Checkout</h1>
-        <p className="mt-4 text-sm text-muted-foreground">
-          Your cart is empty. Add pieces from the shop first.
-        </p>
-        <Link
-          href="/shop"
-          className="mt-6 inline-flex h-10 items-center bg-foreground px-5 text-sm text-background"
-        >
-          Continue shopping
-        </Link>
-      </div>
+        <EmptyState
+          icon={ShoppingBag}
+          title="Your bag is empty"
+          description="Add pieces from the shop before checking out."
+          action={
+            <Link href="/shop" className={cn(buttonVariants())}>
+              Continue shopping
+            </Link>
+          }
+          className="mt-6 border border-dashed border-border"
+        />
+      </Section>
     );
   }
 
@@ -329,21 +343,31 @@ export function CheckoutExperience() {
           className="mt-8 flex gap-6 border-b border-border"
           aria-label="Checkout steps"
         >
-          {STEPS.map((item) => (
+          {STEPS.map((item, index) => {
+            const reachable = index <= stepIndex;
+            return (
             <button
               key={item}
               type="button"
-              onClick={() => setStep(item)}
+              onClick={() => {
+                if (index < stepIndex) setStep(item);
+                else if (index === stepIndex) return;
+                else if (item === "Shipping") void goToShipping();
+                else if (item === "Payment") void goToPayment();
+              }}
               className={cn(
                 "pb-3 text-[0.7rem] font-semibold uppercase tracking-[0.16em] transition",
                 step === item
                   ? "border-b-2 border-foreground text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
+                  : reachable
+                    ? "text-muted-foreground hover:text-foreground"
+                    : "text-muted-foreground/60",
               )}
             >
               {item}
             </button>
-          ))}
+            );
+          })}
         </nav>
 
         {step === "Information" ? (
@@ -365,6 +389,11 @@ export function CheckoutExperience() {
                 <div className="space-y-2 sm:col-span-2">
                   <Label htmlFor="phone">Phone</Label>
                   <Input id="phone" type="tel" {...form.register("phone")} />
+                  {form.formState.errors.phone ? (
+                    <p className="text-xs text-destructive">
+                      {form.formState.errors.phone.message}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </section>
@@ -379,14 +408,26 @@ export function CheckoutExperience() {
                   <Input
                     id="fullName"
                     {...form.register("shippingAddress.fullName")}
+                    aria-invalid={Boolean(form.formState.errors.shippingAddress?.fullName)}
                   />
+                  {form.formState.errors.shippingAddress?.fullName ? (
+                    <p className="text-xs text-destructive">
+                      {form.formState.errors.shippingAddress.fullName.message}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-2 sm:col-span-2">
                   <Label htmlFor="line1">Address line 1</Label>
                   <Input
                     id="line1"
                     {...form.register("shippingAddress.line1")}
+                    aria-invalid={Boolean(form.formState.errors.shippingAddress?.line1)}
                   />
+                  {form.formState.errors.shippingAddress?.line1 ? (
+                    <p className="text-xs text-destructive">
+                      {form.formState.errors.shippingAddress.line1.message}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-2 sm:col-span-2">
                   <Label htmlFor="line2">Address line 2</Label>
@@ -397,14 +438,29 @@ export function CheckoutExperience() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="city">City</Label>
-                  <Input id="city" {...form.register("shippingAddress.city")} />
+                  <Input
+                    id="city"
+                    {...form.register("shippingAddress.city")}
+                    aria-invalid={Boolean(form.formState.errors.shippingAddress?.city)}
+                  />
+                  {form.formState.errors.shippingAddress?.city ? (
+                    <p className="text-xs text-destructive">
+                      {form.formState.errors.shippingAddress.city.message}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="postcode">Postcode</Label>
                   <Input
                     id="postcode"
                     {...form.register("shippingAddress.postcode")}
+                    aria-invalid={Boolean(form.formState.errors.shippingAddress?.postcode)}
                   />
+                  {form.formState.errors.shippingAddress?.postcode ? (
+                    <p className="text-xs text-destructive">
+                      {form.formState.errors.shippingAddress.postcode.message}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-2 sm:col-span-2">
                   <Label htmlFor="county">County</Label>
@@ -426,7 +482,7 @@ export function CheckoutExperience() {
         {step === "Shipping" ? (
           <div className="mt-10 space-y-6">
             <p className="text-sm text-muted-foreground">
-              UK delivery only. Choose a method for your postcode.
+              UK delivery only. Choose how you want the order sent.
             </p>
             {methods.length === 0 ? (
               <p className="text-sm text-destructive">
@@ -459,9 +515,11 @@ export function CheckoutExperience() {
                       ) : null}
                     </span>
                   </span>
-                  <span className="tabular-nums text-muted-foreground">
-                    {formatGbp(method.pricePence)}
-                  </span>
+                  <PriceDisplay
+                    pence={method.pricePence}
+                    size="sm"
+                    className="text-muted-foreground"
+                  />
                 </label>
               ))}
             </div>
@@ -502,9 +560,7 @@ export function CheckoutExperience() {
             {orderTotal != null ? (
               <p className="text-sm">
                 Amount to transfer:{" "}
-                <strong className="tabular-nums">
-                  {formatGbp(orderTotal)}
-                </strong>
+                <PriceDisplay pence={orderTotal} size="sm" className="font-semibold" />
               </p>
             ) : null}
             <Button
@@ -551,34 +607,39 @@ export function CheckoutExperience() {
                 {item.productName ?? item.sku ?? "Item"} × {item.quantity}
                 {item.inStock === false ? " — unavailable" : ""}
               </span>
-              <span className="tabular-nums">
-                {formatGbp(
-                  item.lineTotalPence ?? item.unitPricePence * item.quantity,
-                )}
-              </span>
+              <PriceDisplay
+                pence={
+                  item.lineTotalPence ?? item.unitPricePence * item.quantity
+                }
+                size="sm"
+              />
             </li>
           ))}
         </ul>
         <div className="mt-8 space-y-2 border-t border-border pt-6 text-sm">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Subtotal</span>
-            <span className="tabular-nums">
-              {subtotal != null ? formatGbp(subtotal) : "—"}
-            </span>
+            {subtotal != null ? (
+              <PriceDisplay pence={subtotal} size="sm" />
+            ) : (
+              <span>—</span>
+            )}
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Shipping</span>
-            <span className="tabular-nums">
-              {selectedShipping
-                ? formatGbp(selectedShipping.pricePence)
-                : "Select method"}
-            </span>
+            {selectedShipping ? (
+              <PriceDisplay pence={selectedShipping.pricePence} size="sm" />
+            ) : (
+              <span>Select method</span>
+            )}
           </div>
           <div className="flex justify-between border-t border-border pt-2 font-semibold">
             <span>Total</span>
-            <span className="tabular-nums">
-              {orderTotal != null ? formatGbp(orderTotal) : "—"}
-            </span>
+            {orderTotal != null ? (
+              <PriceDisplay pence={orderTotal} size="sm" className="font-semibold" />
+            ) : (
+              <span>—</span>
+            )}
           </div>
           <p className="pt-2 text-xs text-muted-foreground">
             Prices include VAT. If anything changes before you order, we will

@@ -188,7 +188,8 @@ describe('Payment proof → approve flow', () => {
       }),
     });
 
-    expect(status).toBe(200);
+    // Nest @Post defaults to 201 Created for successful checkout.
+    expect(status).toBe(201);
     expect(body?.success).toBe(true);
     if (body?.success) {
       orderNumber = body.data.orderNumber;
@@ -210,7 +211,7 @@ describe('Payment proof → approve flow', () => {
         email: checkoutEmail,
       }),
     });
-    expect(status).toBe(200);
+    expect(status).toBe(201);
     expect(body?.success).toBe(true);
     if (body?.success) {
       expect(body.data.orderNumber).toBe(orderNumber);

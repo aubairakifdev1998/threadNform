@@ -70,9 +70,17 @@ export class RateLimitGuard implements CanActivate {
         );
       } catch (error) {
         this.logger.error(
-          `Rate limiter unavailable for ${rule.name}; allowing request`,
+          `Rate limiter unavailable for ${rule.name}`,
           error instanceof Error ? error.stack : String(error),
         );
+        // Auth / lookup must fail closed; checkout/cart stay available.
+        if (
+          /^(sign-in|sign-up|forgot-password|oauth|order-lookup|order-view)/.test(
+            rule.name,
+          )
+        ) {
+          throw new TooManyRequestsException(60);
+        }
         return true;
       }
       if (!decision.allowed) {

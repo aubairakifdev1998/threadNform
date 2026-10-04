@@ -145,7 +145,7 @@ export default function AuthCallbackPage() {
           <div className="mt-6 flex flex-col gap-2 sm:flex-row">
             <Link
               href="/login"
-              className="inline-flex h-10 items-center justify-center bg-foreground px-5 text-sm text-background"
+              className="inline-flex h-10 items-center justify-center bg-primary px-5 text-sm text-primary-foreground shadow-e1"
             >
               Back to sign in
             </Link>

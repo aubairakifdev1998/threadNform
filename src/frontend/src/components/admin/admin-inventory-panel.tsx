@@ -1,32 +1,29 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Boxes, ExternalLink, PackagePlus, SlidersHorizontal } from "lucide-react";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
 import { AdminListPagination } from "@/components/admin/admin-list-pagination";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { DataTable } from "@/components/admin/data-table";
+import { RowActions } from "@/components/admin/row-actions";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "@/components/ui/card";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { AdminSelect } from "@/components/admin/admin-select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { MetaChip } from "@/components/ui/status-badge";
+import { StockBadge } from "@/components/status/status-badges";
 import { adminApi } from "@/lib/api";
 import {
   errorMessage,
@@ -37,8 +34,7 @@ import {
   useProductVariants,
   useWarehouses,
 } from "@/lib/query/admin";
-import { cn } from "@/lib/utils";
-import { ListBlockShimmer } from "@/components/ui/page-shimmers";
+import { LOW_STOCK_THRESHOLD } from "@/lib/status";
 import type { ProductSummary } from "@/types/api";
 
 type Warehouse = { id: string; name: string; code?: string };
@@ -70,40 +66,257 @@ export function AdminInventoryPanel() {
   const initialProductId = searchParams.get("productId") ?? "";
 
   const [page, setPage] = useState(1);
-  const [selectedWarehouseId, setWarehouseId] = useState("");
-  const [productId, setProductId] = useState(initialProductId);
-  const [selectedVariantId, setVariantId] = useState("");
-  const [onHandDelta, setOnHandDelta] = useState(10);
-  const [reason, setReason] = useState("Restock");
   const [filterProductId, setFilterProductId] = useState<string>(
     initialProductId || "all",
   );
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  // Pre-selection carried into the sheet when adjusting from a specific row.
+  const [adjustTarget, setAdjustTarget] = useState<{
+    productId: string;
+    variantId: string;
+  } | null>(initialProductId ? { productId: initialProductId, variantId: "" } : null);
 
-  const warehouseQuery = useWarehouses<Warehouse>();
   const inventoryQuery = useAdminInventory({
     page,
     pageSize: PAGE_SIZE,
     productId: filterProductId === "all" ? undefined : filterProductId,
   });
   const productQuery = useAllAdminProducts("DRAFT,ACTIVE,INACTIVE");
-  const variantQuery = useProductVariants(productId);
-  useErrorToast(
-    warehouseQuery.error ?? inventoryQuery.error ?? productQuery.error,
-    "Failed to load inventory",
-  );
-  useErrorToast(variantQuery.error, "Failed to load product variants");
-  const loading =
-    warehouseQuery.isPending || inventoryQuery.isPending || productQuery.isPending;
-
-  const warehouses = warehouseQuery.data ?? [];
-  // Default to the first warehouse until the admin picks one.
-  const warehouseId = selectedWarehouseId || warehouses[0]?.id || "";
+  useErrorToast(productQuery.error, "Failed to load the product list");
 
   // Archived products/variants and unlinked rows are excluded server-side.
   const rows: InventoryRow[] = inventoryQuery.data?.items ?? [];
   const total = inventoryQuery.data?.total ?? rows.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const products: ProductSummary[] = productQuery.data ?? NO_PRODUCTS;
+
+  const lowStockCount = rows.filter(
+    (row) => (row.available ?? 0) <= LOW_STOCK_THRESHOLD,
+  ).length;
+
+  function openAdjust(target?: { productId: string; variantId: string }) {
+    setAdjustTarget(target ?? null);
+    setAdjustOpen(true);
+  }
+
+  const columns = useMemo<ColumnDef<InventoryRow, unknown>[]>(
+    () => [
+      {
+        accessorKey: "productName",
+        header: "Product",
+        meta: { primary: true, label: "Product" },
+        cell: ({ row }) => (
+          <div className="min-w-0">
+            {row.original.productId ? (
+              <Link
+                href={`/admin/products/${row.original.productId}`}
+                className="font-medium hover:underline"
+              >
+                {row.original.productName ?? "Unknown product"}
+              </Link>
+            ) : (
+              <span className="font-medium">
+                {row.original.productName ?? "Unknown product"}
+              </span>
+            )}
+            {row.original.productSlug ? (
+              <p className="truncate text-xs text-muted-foreground">
+                {row.original.productSlug}
+              </p>
+            ) : null}
+          </div>
+        ),
+      },
+      {
+        accessorKey: "sku",
+        header: "SKU",
+        cell: ({ row }) => (
+          <MetaChip className="text-numeric">
+            {row.original.sku ?? row.original.variantId.slice(0, 8)}
+          </MetaChip>
+        ),
+      },
+      {
+        accessorKey: "onHand",
+        header: "On hand",
+        meta: { align: "right", secondary: true },
+        cell: ({ row }) => row.original.onHand ?? "—",
+      },
+      {
+        accessorKey: "reserved",
+        header: "Reserved",
+        meta: { align: "right", secondary: true },
+        cell: ({ row }) => row.original.reserved ?? "—",
+      },
+      {
+        accessorKey: "available",
+        header: "Available",
+        cell: ({ row }) => <StockBadge available={row.original.available} />,
+      },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        meta: { align: "right", cardFooter: true, className: "w-12" },
+        cell: ({ row }) => (
+          <RowActions
+            label={row.original.sku ?? "this SKU"}
+            actions={[
+              {
+                label: "Adjust stock",
+                icon: <SlidersHorizontal aria-hidden />,
+                onSelect: () =>
+                  openAdjust({
+                    productId: row.original.productId ?? "",
+                    variantId: row.original.variantId,
+                  }),
+              },
+              ...(row.original.productId
+                ? [
+                    {
+                      label: "Open product",
+                      icon: <ExternalLink aria-hidden />,
+                      href: `/admin/products/${row.original.productId}`,
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        ),
+      },
+    ],
+    [],
+  );
+
+  return (
+    <div className="space-y-6">
+      <AdminPageHeader
+        title="Inventory"
+        description="Stock is held per product SKU. Adjust levels here or from a product page."
+        actions={
+          <Button type="button" onClick={() => openAdjust()}>
+            <PackagePlus aria-hidden />
+            Adjust stock
+          </Button>
+        }
+      />
+
+      {lowStockCount > 0 ? (
+        <p
+          className="rounded-lg border border-foreground/25 bg-foreground/5 px-3 py-2 text-sm"
+          role="status"
+        >
+          {lowStockCount} SKU{lowStockCount === 1 ? "" : "s"} on this page{" "}
+          {lowStockCount === 1 ? "is" : "are"} at or below{" "}
+          {LOW_STOCK_THRESHOLD} units.
+        </p>
+      ) : null}
+
+      <DataTable
+        caption="Stock levels"
+        columns={columns}
+        data={rows}
+        getRowId={(row) => `${row.warehouseId}-${row.variantId}`}
+        isLoading={inventoryQuery.isPending}
+        isRefreshing={inventoryQuery.isPlaceholderData}
+        isError={inventoryQuery.isError}
+        error={inventoryQuery.error}
+        onRetry={() => void inventoryQuery.refetch()}
+        toolbar={
+          <div className="flex items-center gap-2">
+            <Label htmlFor="inv-filter" className="label-meta text-muted-foreground">
+              Product
+            </Label>
+            <AdminSelect
+              id="inv-filter"
+              className="w-full sm:w-56"
+              value={filterProductId}
+              onChange={(event) => {
+                setFilterProductId(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="all">All products</option>
+              {products.map((product) => (
+                <option key={product.id} value={product.id}>
+                  {product.name}
+                </option>
+              ))}
+            </AdminSelect>
+          </div>
+        }
+        empty={{
+          icon: Boxes,
+          title:
+            filterProductId === "all"
+              ? "No stock records yet"
+              : "No stock records for this product",
+          description:
+            filterProductId === "all"
+              ? "Stock rows are created when a product variant is given an opening quantity."
+              : "This product has no stocked SKUs. Adjust stock to create the first record.",
+          action: (
+            <Button size="sm" onClick={() => openAdjust()}>
+              <PackagePlus aria-hidden />
+              Adjust stock
+            </Button>
+          ),
+        }}
+        footer={
+          !inventoryQuery.isPending && !inventoryQuery.isError && total > 0 ? (
+            <AdminListPagination
+              page={Math.min(page, totalPages)}
+              totalPages={totalPages}
+              total={total}
+              pageSize={PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          ) : null
+        }
+      />
+
+      <AdjustStockSheet
+        open={adjustOpen}
+        onOpenChange={setAdjustOpen}
+        products={products}
+        target={adjustTarget}
+      />
+    </div>
+  );
+}
+
+function AdjustStockSheet({
+  open,
+  onOpenChange,
+  products,
+  target,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  products: ProductSummary[];
+  target: { productId: string; variantId: string } | null;
+}) {
+  const [productId, setProductId] = useState(target?.productId ?? "");
+  const [selectedVariantId, setVariantId] = useState(target?.variantId ?? "");
+  const [selectedWarehouseId, setWarehouseId] = useState("");
+  const [onHandDelta, setOnHandDelta] = useState(10);
+  const [reason, setReason] = useState("Restock");
+
+  // Re-seed from the row the admin opened the sheet from.
+  useEffect(() => {
+    if (!open) return;
+    setProductId(target?.productId ?? "");
+    setVariantId(target?.variantId ?? "");
+  }, [open, target]);
+
+  const warehouseQuery = useWarehouses<Warehouse>();
+  const variantQuery = useProductVariants(productId);
+  useErrorToast(warehouseQuery.error, "Failed to load warehouses");
+  useErrorToast(variantQuery.error, "Failed to load product variants");
+
+  const warehouses = warehouseQuery.data ?? [];
+  // Default to the first warehouse until the admin picks one.
+  const warehouseId = selectedWarehouseId || warehouses[0]?.id || "";
 
   const variants: VariantOption[] = useMemo(
     () =>
@@ -116,6 +329,7 @@ export function AdminInventoryPanel() {
   const variantId = variants.some((v) => v.id === selectedVariantId)
     ? selectedVariantId
     : (variants[0]?.id ?? "");
+  const selectedVariant = variants.find((v) => v.id === variantId);
 
   const adjustMutation = useAdminMutation(
     (token, body: Parameters<typeof adminApi.adjustInventory>[1]) =>
@@ -141,68 +355,69 @@ export function AdminInventoryPanel() {
         reason: reason.trim() || "Restock",
       });
       toast.success("Stock updated for product variant");
+      onOpenChange(false);
     } catch (error) {
       toast.error(errorMessage(error, "Adjustment failed"));
     }
   }
 
-  const selectedVariant = variants.find((v) => v.id === variantId);
+  const projected = selectedVariant
+    ? selectedVariant.onHand + (Number.isFinite(onHandDelta) ? onHandDelta : 0)
+    : null;
 
   return (
-    <div className="space-y-8">
-      <AdminPageHeader
-        title="Inventory"
-        description="Stock only exists for product SKUs. Adjust levels here or from each product page."
-      />
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full overflow-y-auto sm:max-w-md">
+        <SheetHeader>
+          <SheetTitle>Adjust stock</SheetTitle>
+          <SheetDescription>
+            Pick a product, then a SKU. This updates the inventory row linked to
+            that variant.
+          </SheetDescription>
+        </SheetHeader>
 
-      <Card className="max-w-2xl">
-        <CardHeader>
-          <CardTitle>Adjust stock</CardTitle>
-          <CardDescription>
-            Pick a product, then a SKU. Updates the inventory row linked to that
-            variant.
-          </CardDescription>
-        </CardHeader>
-        <form onSubmit={onSubmit}>
-          <CardContent className="grid gap-4">
+        <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
+          <div className="grid gap-4 px-4">
             <div className="space-y-2">
               <Label htmlFor="inv-warehouse">Warehouse</Label>
               <AdminSelect
                 id="inv-warehouse"
                 value={warehouseId}
-                onChange={(e) => setWarehouseId(e.target.value)}
+                onChange={(event) => setWarehouseId(event.target.value)}
               >
                 <option value="" disabled>
                   Select warehouse
                 </option>
-                {warehouses.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
+                {warehouses.map((warehouse) => (
+                  <option key={warehouse.id} value={warehouse.id}>
+                    {warehouse.name}
                   </option>
                 ))}
               </AdminSelect>
             </div>
+
             <div className="space-y-2">
               <Label htmlFor="inv-product">Product</Label>
               <AdminSelect
                 id="inv-product"
                 value={productId}
-                onChange={(e) => setProductId(e.target.value)}
+                onChange={(event) => setProductId(event.target.value)}
               >
                 <option value="">Select product</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
+                {products.map((product) => (
+                  <option key={product.id} value={product.id}>
+                    {product.name}
                   </option>
                 ))}
               </AdminSelect>
             </div>
+
             <div className="space-y-2">
               <Label htmlFor="inv-variant">Variant (SKU)</Label>
               <AdminSelect
                 id="inv-variant"
                 value={variantId}
-                onChange={(e) => setVariantId(e.target.value)}
+                onChange={(event) => setVariantId(event.target.value)}
                 disabled={!productId || variants.length === 0}
               >
                 <option value="">
@@ -212,27 +427,26 @@ export function AdminInventoryPanel() {
                       ? "No active SKUs on this product"
                       : "Select SKU"}
                 </option>
-                {variants.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.sku} · avail {v.available}
+                {variants.map((variant) => (
+                  <option key={variant.id} value={variant.id}>
+                    {variant.sku} · avail {variant.available}
                   </option>
                 ))}
               </AdminSelect>
-              {selectedVariant ? (
-                <p className="text-xs text-muted-foreground">
-                  Current on hand: {selectedVariant.onHand} · available:{" "}
-                  {selectedVariant.available}
-                </p>
-              ) : null}
             </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="onHandDelta">Change (+/−)</Label>
                 <Input
                   id="onHandDelta"
                   type="number"
+                  inputMode="numeric"
                   value={onHandDelta}
-                  onChange={(e) => setOnHandDelta(Number(e.target.value))}
+                  onChange={(event) =>
+                    setOnHandDelta(Number(event.target.value))
+                  }
+                  className="text-numeric"
                 />
               </div>
               <div className="space-y-2">
@@ -240,153 +454,52 @@ export function AdminInventoryPanel() {
                 <Input
                   id="reason"
                   value={reason}
-                  onChange={(e) => setReason(e.target.value)}
+                  onChange={(event) => setReason(event.target.value)}
                 />
               </div>
             </div>
-          </CardContent>
-          <CardFooter className="gap-2">
+
+            {selectedVariant ? (
+              <div
+                className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm"
+                role="status"
+                aria-live="polite"
+              >
+                <p className="text-muted-foreground">
+                  On hand{" "}
+                  <span className="text-numeric font-medium text-foreground">
+                    {selectedVariant.onHand}
+                  </span>{" "}
+                  · available{" "}
+                  <span className="text-numeric font-medium text-foreground">
+                    {selectedVariant.available}
+                  </span>
+                </p>
+                {projected != null ? (
+                  <p className="mt-1">
+                    After this change, on hand will be{" "}
+                    <span className="text-numeric font-medium">{projected}</span>
+                    {projected < 0 ? " — which is not allowed" : ""}.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          <SheetFooter className="flex-row justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
             <Button type="submit" disabled={saving || !variantId}>
               {saving ? "Saving…" : "Update stock"}
             </Button>
-            {productId ? (
-              <Link
-                href={`/admin/products/${productId}`}
-                className={cn(buttonVariants({ variant: "outline" }))}
-              >
-                Open product
-              </Link>
-            ) : null}
-          </CardFooter>
+          </SheetFooter>
         </form>
-      </Card>
-
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-2">
-          <Label htmlFor="inv-filter">Filter by product</Label>
-          <AdminSelect
-            id="inv-filter"
-            className="w-[240px]"
-            value={filterProductId}
-            onChange={(e) => {
-              setFilterProductId(e.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="all">All products</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </AdminSelect>
-        </div>
-      </div>
-
-      {loading ? (
-        <ListBlockShimmer />
-      ) : (
-        <Card
-          aria-busy={inventoryQuery.isPlaceholderData}
-          className={cn(
-            "transition-opacity",
-            inventoryQuery.isPlaceholderData && "opacity-60",
-          )}
-        >
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Product</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>On hand</TableHead>
-                  <TableHead>Available</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={5}
-                      className="h-24 text-center text-muted-foreground"
-                    >
-                      No product stock rows yet. Create a product with variants
-                      and initial stock, or adjust stock above.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  rows.map((row) => (
-                    <TableRow key={`${row.warehouseId}-${row.variantId}`}>
-                      <TableCell>
-                        <p className="font-medium">
-                          {row.productName ?? "Unknown product"}
-                        </p>
-                        {row.productSlug ? (
-                          <p className="text-xs text-muted-foreground">
-                            {row.productSlug}
-                          </p>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {row.sku ?? row.variantId.slice(0, 8)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{row.onHand ?? "—"}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            (row.available ?? 0) <= 5
-                              ? "destructive"
-                              : "secondary"
-                          }
-                        >
-                          {row.available ?? "—"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {row.productId ? (
-                          <Link
-                            href={`/admin/products/${row.productId}`}
-                            className={cn(
-                              buttonVariants({ variant: "ghost", size: "sm" }),
-                            )}
-                          >
-                            Product
-                          </Link>
-                        ) : null}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            if (row.productId) setProductId(row.productId);
-                            setVariantId(row.variantId);
-                            setOnHandDelta(10);
-                          }}
-                        >
-                          Restock
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
-
-      {!loading && total > 0 ? (
-        <AdminListPagination
-          page={Math.min(page, totalPages)}
-          totalPages={totalPages}
-          total={total}
-          pageSize={PAGE_SIZE}
-          onPageChange={setPage}
-        />
-      ) : null}
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }

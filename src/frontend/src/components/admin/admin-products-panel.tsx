@@ -1,50 +1,63 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Archive, CheckCircle2, Package, Pencil, Plus } from "lucide-react";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
 import { AdminListPagination } from "@/components/admin/admin-list-pagination";
+import { DataTable } from "@/components/admin/data-table";
+import { RowActions } from "@/components/admin/row-actions";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { MetaChip } from "@/components/ui/status-badge";
+import { ProductStatusBadge } from "@/components/status/status-badges";
+import { PriceDisplay } from "@/components/ui/price";
+import { ToggleFilter } from "@/components/admin/toggle-filter";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { adminApi } from "@/lib/api";
 import {
   errorMessage,
   useAdminMutation,
   useAdminProducts,
-  useErrorToast,
 } from "@/lib/query/admin";
-import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import { AdminTableShimmer } from "@/components/ui/page-shimmers";
 import type { ProductSummary } from "@/types/api";
 
 const PAGE_SIZE = 10;
 /** Everything except ARCHIVED, filtered server-side so pages stay full. */
 const LIVE_STATUSES = "DRAFT,ACTIVE,INACTIVE";
 
+const STATUS_FILTERS = [
+  { value: LIVE_STATUSES, label: "All live" },
+  { value: "ACTIVE", label: "Active" },
+  { value: "DRAFT", label: "Draft" },
+  { value: "INACTIVE", label: "Inactive" },
+  { value: "ARCHIVED", label: "Archived" },
+];
+
+type ProductRow = ProductSummary & { status?: string };
+
 export function AdminProductsPanel() {
   const [page, setPage] = useState(1);
+  const [status, setStatus] = useState(LIVE_STATUSES);
+  const [search, setSearch] = useState("");
+  const query = useDebouncedValue(search.trim());
+
+  // A narrower result set can leave the current page beyond the last one.
+  useEffect(() => {
+    setPage(1);
+  }, [status, query]);
 
   const products = useAdminProducts({
     page,
     pageSize: PAGE_SIZE,
-    status: LIVE_STATUSES,
+    status,
+    q: query || undefined,
   });
-  useErrorToast(products.error, "Failed to load products");
-  const items: ProductSummary[] = products.isError
-    ? []
-    : (products.data?.items ?? []);
-  const total = products.isError ? 0 : (products.data?.total ?? items.length);
+
+  const items = (products.data?.items ?? []) as ProductRow[];
+  const total = products.data?.total ?? items.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const activateMutation = useAdminMutation((token, id: string) =>
@@ -81,6 +94,125 @@ export function AdminProductsPanel() {
     }
   }
 
+  async function activateMany(rows: ProductRow[], clear: () => void) {
+    const pending = rows.filter((row) => row.status !== "ACTIVE");
+    if (pending.length === 0) {
+      toast.info("Those products are already active");
+      return;
+    }
+    const results = await Promise.allSettled(
+      pending.map((row) => activateMutation.mutateAsync(row.id)),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed === 0) {
+      toast.success(`${pending.length} product(s) activated`);
+    } else {
+      toast.error(
+        `${pending.length - failed} activated, ${failed} could not be updated`,
+      );
+    }
+    clear();
+  }
+
+  const columns = useMemo<ColumnDef<ProductRow, unknown>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Product",
+        meta: { primary: true, label: "Product" },
+        cell: ({ row }) => (
+          <div className="min-w-0">
+            <Link
+              href={`/admin/products/${row.original.id}`}
+              className="font-medium hover:underline"
+            >
+              {row.original.name}
+            </Link>
+            <p className="truncate text-xs text-muted-foreground">
+              {row.original.slug}
+            </p>
+          </div>
+        ),
+      },
+      {
+        accessorKey: "categoryName",
+        header: "Category",
+        meta: { secondary: true },
+        cell: ({ row }) => (
+          <span className="text-sm text-muted-foreground">
+            {row.original.categoryName ?? "—"}
+          </span>
+        ),
+      },
+      {
+        accessorKey: "productType",
+        header: "Type",
+        meta: { secondary: true },
+        cell: ({ row }) => (
+          <MetaChip>
+            {row.original.productType === "VARIABLE" ? "Variable" : "Simple"}
+          </MetaChip>
+        ),
+      },
+      {
+        accessorKey: "basePricePence",
+        header: "Price",
+        meta: { align: "right" },
+        cell: ({ row }) =>
+          typeof row.original.basePricePence === "number" ? (
+            <PriceDisplay pence={row.original.basePricePence} size="sm" />
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
+      },
+      {
+        accessorKey: "status",
+        header: "Status",
+        cell: ({ row }) => <ProductStatusBadge status={row.original.status} />,
+      },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        meta: { align: "right", cardFooter: true, className: "w-12" },
+        cell: ({ row }) => {
+          const product = row.original;
+          return (
+            <RowActions
+              label={product.name}
+              actions={[
+                {
+                  label: "Edit product",
+                  href: `/admin/products/${product.id}`,
+                  icon: <Pencil aria-hidden />,
+                },
+                ...(product.status !== "ACTIVE"
+                  ? [
+                      {
+                        label: "Activate",
+                        icon: <CheckCircle2 aria-hidden />,
+                        onSelect: () => void activate(product.id),
+                      },
+                    ]
+                  : []),
+                {
+                  label: "Archive",
+                  icon: <Archive aria-hidden />,
+                  destructive: true,
+                  separated: true,
+                  onSelect: () => void remove(product.id, product.name),
+                },
+              ]}
+            />
+          );
+        },
+      },
+    ],
+    // `activate` and `remove` close over the current page only for the
+    // page-step-back behaviour, which is safe to recreate on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [page, items.length],
+  );
 
   return (
     <div className="space-y-6">
@@ -89,127 +221,80 @@ export function AdminProductsPanel() {
         description="Create, edit, stock, and archive catalogue products."
         actions={
           <Link href="/admin/products/new" className={cn(buttonVariants())}>
+            <Plus aria-hidden />
             New product
           </Link>
         }
       />
 
-      {products.isPending ? (
-        <AdminTableShimmer />
-      ) : (
-        <Card
-          aria-busy={products.isPlaceholderData}
-          className={cn(
-            "transition-opacity",
-            products.isPlaceholderData && "opacity-60",
-          )}
-        >
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={5}
-                      className="h-24 text-center text-muted-foreground"
-                    >
-                      No products yet. Create one or run the catalogue seed.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  items.map((product) => {
-                    const status =
-                      (product as { status?: string }).status ?? "—";
-                    return (
-                      <TableRow key={product.id}>
-                        <TableCell>
-                          <Link
-                            href={`/admin/products/${product.id}`}
-                            className="font-medium hover:underline"
-                          >
-                            {product.name}
-                          </Link>
-                          <p className="text-xs text-muted-foreground">
-                            {product.slug}
-                          </p>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">
-                            {product.productType}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="tabular-nums">
-                          {typeof product.basePricePence === "number"
-                            ? formatGbp(product.basePricePence)
-                            : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              status === "ACTIVE" ? "default" : "outline"
-                            }
-                          >
-                            {status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="space-x-1 text-right">
-                          <Link
-                            href={`/admin/products/${product.id}`}
-                            className={cn(
-                              buttonVariants({
-                                variant: "outline",
-                                size: "sm",
-                              }),
-                            )}
-                          >
-                            View
-                          </Link>
-                          {status !== "ACTIVE" ? (
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => void activate(product.id)}
-                            >
-                              Activate
-                            </Button>
-                          ) : null}
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void remove(product.id, product.name)}
-                          >
-                            Delete
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
-      {!products.isPending && total > 0 ? (
-        <AdminListPagination
-          page={Math.min(page, totalPages)}
-          totalPages={totalPages}
-          total={total}
-          pageSize={PAGE_SIZE}
-          onPageChange={setPage}
-        />
-      ) : null}
+      <DataTable
+        caption="Products"
+        columns={columns}
+        data={items}
+        getRowId={(row) => row.id}
+        isLoading={products.isPending}
+        isRefreshing={products.isPlaceholderData}
+        isError={products.isError}
+        error={products.error}
+        onRetry={() => void products.refetch()}
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search products by name or SKU"
+        toolbar={
+          <ToggleFilter
+            label="Status"
+            options={STATUS_FILTERS}
+            value={status}
+            onChange={setStatus}
+          />
+        }
+        enableRowSelection
+        bulkActions={(rows, clear) => (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void activateMany(rows, clear)}
+            disabled={activateMutation.isPending}
+          >
+            <CheckCircle2 aria-hidden />
+            Activate
+          </Button>
+        )}
+        empty={{
+          icon: Package,
+          title: query
+            ? `No products match “${query}”`
+            : "No products in this view",
+          description: query
+            ? "Try a different search term, or clear the search to see everything."
+            : "Products you create will appear here. You can also run the catalogue seed.",
+          action: query ? (
+            <Button variant="outline" size="sm" onClick={() => setSearch("")}>
+              Clear search
+            </Button>
+          ) : (
+            <Link
+              href="/admin/products/new"
+              className={cn(buttonVariants({ size: "sm" }))}
+            >
+              <Plus aria-hidden />
+              New product
+            </Link>
+          ),
+        }}
+        footer={
+          !products.isPending && !products.isError && total > 0 ? (
+            <AdminListPagination
+              page={Math.min(page, totalPages)}
+              totalPages={totalPages}
+              total={total}
+              pageSize={PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          ) : null
+        }
+      />
     </div>
   );
 }

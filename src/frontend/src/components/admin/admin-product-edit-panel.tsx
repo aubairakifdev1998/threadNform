@@ -9,7 +9,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -30,9 +29,16 @@ import {
 import { adminApi, catalogApi } from "@/lib/api";
 import { apiRequest, ApiError } from "@/lib/api/client";
 import { tokenStore } from "@/lib/auth/session";
-import { formatGbp, poundsToPence } from "@/lib/money";
+import { poundsToPence } from "@/lib/money";
+import { productStatusMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { PageSpinner } from "@/components/ui/page-shimmers";
+import { PriceDisplay } from "@/components/ui/price";
+import { ErrorState } from "@/components/ui/data-states";
+import {
+  ProductStatusBadge,
+  StockBadge,
+} from "@/components/status/status-badges";
 
 type ProductStatus = "DRAFT" | "ACTIVE" | "INACTIVE" | "ARCHIVED";
 
@@ -314,12 +320,18 @@ export function AdminProductEditPanel({ productId }: { productId: string }) {
 
   if (!product) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Product not found.{" "}
-        <Link href="/admin/products" className="underline">
-          Back to products
-        </Link>
-      </p>
+      <ErrorState
+        title="Product not found"
+        description="It may have been archived or the link is out of date."
+        action={
+          <Link
+            href="/admin/products"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+          >
+            Back to products
+          </Link>
+        }
+      />
     );
   }
 
@@ -333,11 +345,7 @@ export function AdminProductEditPanel({ productId }: { productId: string }) {
         description={`${product.slug} · ${product.productType ?? "—"} · stock ${product.totalAvailable ?? 0} available`}
         actions={
           <>
-            <Badge
-              variant={product.status === "ACTIVE" ? "default" : "outline"}
-            >
-              {product.status ?? "—"}
-            </Badge>
+            <ProductStatusBadge status={product.status} />
             <Link
               href="/admin/products"
               className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
@@ -437,7 +445,7 @@ export function AdminProductEditPanel({ productId }: { productId: string }) {
               >
                 {STATUSES.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {productStatusMeta(s).label}
                   </option>
                 ))}
               </AdminSelect>
@@ -497,21 +505,19 @@ export function AdminProductEditPanel({ productId }: { productId: string }) {
                     <TableCell>
                       <p className="font-medium">{v.sku}</p>
                     </TableCell>
-                    <TableCell className="tabular-nums">
-                      {typeof v.basePricePence === "number"
-                        ? formatGbp(v.basePricePence)
-                        : "—"}
-                    </TableCell>
-                    <TableCell className="tabular-nums">{v.onHand}</TableCell>
                     <TableCell>
-                      <Badge
-                        variant={v.available <= 5 ? "destructive" : "secondary"}
-                      >
-                        {v.available}
-                      </Badge>
+                      {typeof v.basePricePence === "number" ? (
+                        <PriceDisplay pence={v.basePricePence} size="sm" />
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                    <TableCell className="text-numeric">{v.onHand}</TableCell>
+                    <TableCell>
+                      <StockBadge available={v.available} />
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{v.status ?? "ACTIVE"}</Badge>
+                      <ProductStatusBadge status={v.status ?? "ACTIVE"} />
                     </TableCell>
                     <TableCell className="space-x-1 text-right">
                       <Button
@@ -538,6 +544,9 @@ export function AdminProductEditPanel({ productId }: { productId: string }) {
           </Table>
 
           <div className="grid gap-3 border-t border-border p-4 sm:grid-cols-2 lg:grid-cols-3">
+            <p className="label-meta text-muted-foreground sm:col-span-2 lg:col-span-3">
+              Add a variant
+            </p>
             <div className="space-y-2">
               <Label>Size</Label>
               <AdminSelect
@@ -556,7 +565,7 @@ export function AdminProductEditPanel({ productId }: { productId: string }) {
               </AdminSelect>
             </div>
             <div className="space-y-2">
-              <Label>Color</Label>
+              <Label>Colour</Label>
               <AdminSelect
                 value={colorId}
                 onChange={(e) => {
@@ -602,13 +611,19 @@ export function AdminProductEditPanel({ productId }: { productId: string }) {
                 onChange={(e) => setInitialStock(e.target.value)}
               />
             </div>
-            <div className="space-y-2">
-              <Label>Restock delta</Label>
-              <Input
-                type="number"
-                value={stockDelta}
-                onChange={(e) => setStockDelta(e.target.value)}
-              />
+            <div className="space-y-2 sm:col-span-2 lg:col-span-3">
+              <Label>Restock quantity</Label>
+              <div className="flex max-w-xs items-center gap-3">
+                <Input
+                  type="number"
+                  value={stockDelta}
+                  onChange={(e) => setStockDelta(e.target.value)}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Used only when you press +Stock on an existing SKU. It is not
+                part of adding a variant.
+              </p>
             </div>
           </div>
         </CardContent>

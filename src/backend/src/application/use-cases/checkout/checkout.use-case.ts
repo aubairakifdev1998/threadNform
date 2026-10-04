@@ -152,14 +152,15 @@ export class CheckoutUseCase {
         'GUEST_CHECKOUT_DISABLED',
       );
     }
-    if (input.customerId) {
-      const customer = await this.customers.findById(input.customerId);
-      if (customer?.status === 'BLOCKED') {
-        throw new ForbiddenException(
-          'This account cannot place orders. Please contact support.',
-          'ACCOUNT_BLOCKED',
-        );
-      }
+    // Block applies to signed-in checkout and guest checkout using a blocked email.
+    const blockedCustomer = input.customerId
+      ? await this.customers.findById(input.customerId)
+      : await this.customers.findByEmail(email);
+    if (blockedCustomer?.status === 'BLOCKED') {
+      throw new ForbiddenException(
+        'This account cannot place orders. Please contact support.',
+        'ACCOUNT_BLOCKED',
+      );
     }
 
     const cart = await this.carts.findById(input.cartId);

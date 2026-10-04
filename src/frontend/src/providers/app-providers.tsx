@@ -14,10 +14,12 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
       <AuthProvider>
         <TooltipProvider delay={200}>
           {children}
-          <Toaster richColors position="top-right" closeButton />
+          <Toaster />
         </TooltipProvider>
       </AuthProvider>
-      <ReactQueryDevtools buttonPosition="bottom-left" />
+      {process.env.NODE_ENV === "development" ? (
+        <ReactQueryDevtools buttonPosition="bottom-left" />
+      ) : null}
     </QueryClientProvider>
   );
 }

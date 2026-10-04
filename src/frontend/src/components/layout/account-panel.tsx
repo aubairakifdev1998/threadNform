@@ -18,9 +18,12 @@ import {
   PaymentStatusPill,
 } from "@/components/orders/status-pill";
 import { customerNextStep, formatDate } from "@/lib/orders/presentation";
-import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { AccountShimmer } from "@/components/ui/page-shimmers";
+import { EmptyState } from "@/components/ui/data-states";
+import { PriceDisplay } from "@/components/ui/price";
+import { Section } from "@/components/layout/section";
+import { Package, MapPin } from "lucide-react";
 import type {
   CustomerAddress,
   CustomerProfile,
@@ -55,6 +58,9 @@ export function AccountPanel() {
   const [addressForm, setAddressForm] = useState(emptyAddress);
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [savingAddress, setSavingAddress] = useState(false);
+  const [confirmingAddressId, setConfirmingAddressId] = useState<string | null>(
+    null,
+  );
 
   const load = useCallback(async () => {
     const hadSession = Boolean(tokenStore.getAccessToken());
@@ -219,6 +225,7 @@ export function AccountPanel() {
     try {
       await addressesApi.remove(token, id);
       toast.success("Address removed");
+      setConfirmingAddressId(null);
       setAddresses((prev) => prev.filter((a) => a.id !== id));
     } catch (error) {
       toast.error(
@@ -247,8 +254,8 @@ export function AccountPanel() {
 
   if (!user) {
     return (
-      <div className="mx-auto max-w-3xl px-4 py-16 sm:px-6 lg:px-8">
-        <h1 className="font-display text-4xl font-semibold">Account</h1>
+      <Section width="narrow" space="loose">
+        <h1 className="heading-display text-4xl">Account</h1>
         <p className="mt-3 text-muted-foreground">
           Manage orders, delivery addresses, and password after signing in.
         </p>
@@ -263,17 +270,17 @@ export function AccountPanel() {
             Create account
           </Link>
         </div>
-      </div>
+      </Section>
     );
   }
 
   const isAdmin = Boolean(user.isAdmin || user.adminRole);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-12 px-4 py-16 sm:px-6 lg:px-8">
+    <Section width="narrow" space="loose" className="space-y-12">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-4xl font-semibold">Account</h1>
+          <h1 className="heading-display text-4xl">Account</h1>
           <p className="mt-2 text-muted-foreground">
             Signed in as{" "}
             <span className="font-medium text-foreground">
@@ -306,7 +313,7 @@ export function AccountPanel() {
       <section className="space-y-4">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <h2 className="font-display text-xl font-semibold">
+            <h2 className="font-display text-xl font-semibold tracking-tight">
               Orders & tracking
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -322,9 +329,20 @@ export function AccountPanel() {
         </div>
 
         {orders.length === 0 ? (
-          <p className="border border-border bg-secondary/30 px-4 py-6 text-sm text-muted-foreground">
-            No orders yet. When you place an order, it will show up here.
-          </p>
+          <EmptyState
+            icon={Package}
+            title="No orders yet"
+            description="When you place an order, it will show up here with payment and delivery status."
+            action={
+              <Link
+                href="/shop"
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+              >
+                Start shopping
+              </Link>
+            }
+            className="border border-dashed border-border py-10"
+          />
         ) : (
           <ul className="space-y-3">
             {orders.map((order) => {
@@ -342,7 +360,7 @@ export function AccountPanel() {
                     href={`/orders/${order.orderNumber}`}
                     className={cn(
                       "group block rounded-lg border bg-card p-4 transition hover:border-foreground/40 sm:p-5",
-                      needsAction ? "border-warning/50" : "border-border",
+                      needsAction ? "border-foreground/30" : "border-border",
                     )}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -352,9 +370,10 @@ export function AccountPanel() {
                           Placed {formatDate(order.placedAt ?? order.createdAt)}
                         </p>
                       </div>
-                      <p className="font-display text-lg font-semibold tabular-nums">
-                        {formatGbp(order.grandTotalPence ?? order.totalPence)}
-                      </p>
+                      <PriceDisplay
+                        pence={order.grandTotalPence ?? order.totalPence}
+                        size="md"
+                      />
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <OrderStatusPill status={order.status} />
@@ -384,7 +403,7 @@ export function AccountPanel() {
       </section>
 
       <section className="space-y-4 border border-border p-5">
-        <h2 className="font-display text-xl font-semibold">Profile</h2>
+        <h2 className="font-display text-xl font-semibold tracking-tight">Profile</h2>
         <p className="text-sm text-muted-foreground">
           Name and phone used for delivery and order updates.
         </p>
@@ -418,7 +437,7 @@ export function AccountPanel() {
       </section>
 
       <section className="space-y-4 border border-border p-5">
-        <h2 className="font-display text-xl font-semibold">
+        <h2 className="font-display text-xl font-semibold tracking-tight">
           Delivery addresses
         </h2>
         <p className="text-sm text-muted-foreground">
@@ -426,9 +445,12 @@ export function AccountPanel() {
         </p>
 
         {addresses.length === 0 ? (
-          <p className="bg-secondary/30 px-4 py-4 text-sm text-muted-foreground">
-            No saved addresses yet.
-          </p>
+          <EmptyState
+            icon={MapPin}
+            title="No saved addresses"
+            description="Add a UK delivery address to speed up checkout."
+            className="border border-dashed border-border py-8"
+          />
         ) : (
           <ul className="divide-y divide-border border border-border">
             {addresses.map((address) => (
@@ -472,10 +494,25 @@ export function AccountPanel() {
                   <Button
                     type="button"
                     size="sm"
-                    variant="ghost"
-                    onClick={() => void removeAddress(address.id)}
+                    variant={
+                      confirmingAddressId === address.id ? "destructive" : "ghost"
+                    }
+                    onClick={() => {
+                      if (confirmingAddressId === address.id) {
+                        void removeAddress(address.id);
+                      } else {
+                        setConfirmingAddressId(address.id);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (confirmingAddressId === address.id) {
+                        setConfirmingAddressId(null);
+                      }
+                    }}
                   >
-                    Remove
+                    {confirmingAddressId === address.id
+                      ? "Confirm remove"
+                      : "Remove"}
                   </Button>
                 </div>
               </li>
@@ -550,7 +587,7 @@ export function AccountPanel() {
       </section>
 
       <section className="space-y-4 border border-border p-5">
-        <h2 className="font-display text-xl font-semibold">Password</h2>
+        <h2 className="font-display text-xl font-semibold tracking-tight">Password</h2>
         <p className="text-sm text-muted-foreground">
           Change your password while signed in, or use{" "}
           <Link
@@ -591,6 +628,6 @@ export function AccountPanel() {
           {savingPassword ? "Updating…" : "Update password"}
         </Button>
       </section>
-    </div>
+    </Section>
   );
 }

@@ -12,6 +12,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { PriceDisplay } from "@/components/ui/price";
+import { EmptyState } from "@/components/ui/data-states";
+import {
+  ActiveBadge,
+  PaymentStatusBadge,
+} from "@/components/status/status-badges";
+import { Receipt } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -29,7 +36,6 @@ import {
   useErrorToast,
   usePaymentQueue,
 } from "@/lib/query/admin";
-import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { ListBlockShimmer } from "@/components/ui/page-shimmers";
 
@@ -251,13 +257,10 @@ export function AdminPaymentsPanel() {
                       <div>
                         <p className="font-medium">
                           {bank.accountName}{" "}
-                          {bank.isActive ? (
-                            <Badge className="ml-2">Active</Badge>
-                          ) : (
-                            <Badge variant="outline" className="ml-2">
-                              Inactive
-                            </Badge>
-                          )}
+                          <ActiveBadge
+                            isActive={bank.isActive}
+                            className="ml-2"
+                          />
                         </p>
                         <p className="mt-1 text-muted-foreground">
                           {bank.bankName} · {bank.sortCode} ·{" "}
@@ -463,9 +466,12 @@ export function AdminPaymentsPanel() {
           <ListBlockShimmer rows={4} />
         ) : items.length === 0 ? (
           <Card>
-            <CardContent className="py-16 text-center text-sm text-muted-foreground">
-              No payments match these filters.
-            </CardContent>
+            <EmptyState
+              icon={Receipt}
+              title="No payments match these filters"
+              description="Try another status, evidence filter, or search term."
+              className="py-12"
+            />
           </Card>
         ) : (
           <div
@@ -493,7 +499,7 @@ export function AdminPaymentsPanel() {
                         {item.email}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2">
-                        <Badge variant="secondary">{item.status}</Badge>
+                        <PaymentStatusBadge status={item.status} />
                         <Badge variant="outline">
                           {item.proofCount} proof
                           {item.proofCount === 1 ? "" : "s"}
@@ -506,13 +512,19 @@ export function AdminPaymentsPanel() {
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-base font-medium tabular-nums">
-                        {formatGbp(
-                          item.amountClaimedPence ?? item.amountDuePence ?? 0,
-                        )}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Due {formatGbp(item.amountDuePence)}
+                      <PriceDisplay
+                        pence={
+                          item.amountClaimedPence ?? item.amountDuePence ?? 0
+                        }
+                        size="md"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Due{" "}
+                        <PriceDisplay
+                          pence={item.amountDuePence}
+                          size="sm"
+                          className="text-muted-foreground"
+                        />
                       </p>
                     </div>
                   </CardHeader>
@@ -555,7 +567,11 @@ export function AdminPaymentsPanel() {
                               ) : null}
                               {proof.amountClaimedPence != null ? (
                                 <p>
-                                  Claimed {formatGbp(proof.amountClaimedPence)}
+                                  Claimed{" "}
+                                  <PriceDisplay
+                                    pence={proof.amountClaimedPence}
+                                    size="sm"
+                                  />
                                 </p>
                               ) : null}
                               <p>

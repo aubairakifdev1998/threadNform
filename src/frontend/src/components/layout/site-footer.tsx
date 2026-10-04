@@ -32,9 +32,8 @@ export function SiteFooter() {
     {
       title: "Help",
       links: [
-        { href: "/account", label: "My account" },
-        { href: "/cart", label: "Cart" },
-        { href: "/checkout", label: "Checkout" },
+        { href: "/account", label: "Orders & account" },
+        { href: "/cart", label: "Bag" },
       ],
     },
     {
@@ -57,7 +56,7 @@ export function SiteFooter() {
         </div>
         {footerLinks.map((group) => (
           <div key={group.title}>
-            <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+            <p className="label-eyebrow text-muted-foreground">
               {group.title}
             </p>
             <ul className="mt-4 space-y-2.5">

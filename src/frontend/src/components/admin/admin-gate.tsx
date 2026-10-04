@@ -81,7 +81,7 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
         <p className="text-sm text-muted-foreground">{message}</p>
         <a
           href="/login"
-          className="inline-flex h-10 items-center justify-center bg-foreground px-5 text-sm text-background"
+          className="inline-flex h-10 items-center justify-center bg-primary px-5 text-sm text-primary-foreground shadow-e1"
         >
           Sign in
         </a>

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AdminPageHeader } from "@/components/admin/admin-page-header";
 import { ProductForm } from "@/components/admin/product-form";
 
 export const metadata: Metadata = {
@@ -8,12 +9,10 @@ export const metadata: Metadata = {
 export default function NewProductPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">New product</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Premium catalogue editor with media upload via the storage API.
-        </p>
-      </div>
+      <AdminPageHeader
+        title="New product"
+        description="Create the listing first. You'll land on the editor to add SKUs, stock, and imagery."
+      />
       <ProductForm />
     </div>
   );

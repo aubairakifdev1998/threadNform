@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -42,6 +43,7 @@ export function ProductForm({
 }: {
   onSuccess?: (productId?: string) => void;
 }) {
+  const router = useRouter();
   const form = useForm<ProductFormValues>({
     resolver: zodResolver(productFormSchema) as never,
     defaultValues: {
@@ -131,11 +133,14 @@ export function ProductForm({
           ? "Product created with size/color SKUs and stock"
           : "Product created",
       );
-      onSuccess?.(
+      const createdId =
         product && typeof product === "object" && "id" in product
           ? String((product as { id: string }).id)
-          : undefined,
-      );
+          : undefined;
+      onSuccess?.(createdId);
+      if (!onSuccess && createdId) {
+        router.push(`/admin/products/${createdId}`);
+      }
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Could not create product",
@@ -168,6 +173,7 @@ export function ProductForm({
               <Label htmlFor="name">Name</Label>
               <Input
                 id="name"
+                aria-invalid={Boolean(form.formState.errors.name)}
                 {...form.register("name")}
                 onBlur={(event) => {
                   form.register("name").onBlur(event);
@@ -183,10 +189,24 @@ export function ProductForm({
                   }
                 }}
               />
+              {form.formState.errors.name ? (
+                <p className="text-xs text-destructive">
+                  {form.formState.errors.name.message}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="slug">Slug</Label>
-              <Input id="slug" {...form.register("slug")} />
+              <Input
+                id="slug"
+                {...form.register("slug")}
+                aria-invalid={Boolean(form.formState.errors.slug)}
+              />
+              {form.formState.errors.slug ? (
+                <p className="text-xs text-destructive">
+                  {form.formState.errors.slug.message}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="description">Description</Label>
@@ -209,7 +229,7 @@ export function ProductForm({
                     }
                   }}
                 >
-                  <option value="VARIABLE">Variable (sizes / colors)</option>
+                  <option value="VARIABLE">Variable (sizes / colours)</option>
                   <option value="SIMPLE">Simple (one SKU)</option>
                 </AdminSelect>
               </div>
@@ -302,11 +322,11 @@ export function ProductForm({
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Colors</Label>
+                  <Label>Colours</Label>
                   <div className="flex flex-wrap gap-3">
                     {colors.length === 0 ? (
                       <p className="text-sm text-muted-foreground">
-                        Add colors under Catalogue → Colors first.
+                        Add colours under Catalogue → Colours first.
                       </p>
                     ) : (
                       colors.map((c) => {
@@ -341,7 +361,10 @@ export function ProductForm({
         <Card>
           <CardHeader>
             <CardTitle>Media</CardTitle>
-            <CardDescription>Upload product imagery.</CardDescription>
+            <CardDescription>
+              Files go to storage now. After create you can keep editing the
+              listing, SKUs, and stock.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <MediaUploader />

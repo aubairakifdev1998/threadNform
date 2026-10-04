@@ -31,6 +31,9 @@ import { HeroSpotlight } from "@/components/aceternity/spotlight-hero";
 import { adminApi, siteAdminApi } from "@/lib/api";
 import { tokenStore } from "@/lib/auth/session";
 import { ListBlockShimmer } from "@/components/ui/page-shimmers";
+import { EmptyState } from "@/components/ui/data-states";
+import { ActiveBadge } from "@/components/status/status-badges";
+import { ImageIcon } from "lucide-react";
 import type { SiteBillboard } from "@/types/api";
 
 const PAGE_SIZE = 8;
@@ -401,14 +404,17 @@ export default function AdminBillboardPage() {
       </Card>
 
       <div className="space-y-3">
-        <h2 className="text-lg font-medium">Existing billboards</h2>
+        <h2 className="label-meta text-muted-foreground">Existing billboards</h2>
         {loading ? (
           <ListBlockShimmer rows={3} />
         ) : !items.length ? (
           <Card>
-            <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              No billboards yet.
-            </CardContent>
+            <EmptyState
+              icon={ImageIcon}
+              title="No billboards yet"
+              description="Create one above. The active billboard is what customers see first."
+              className="py-10"
+            />
           </Card>
         ) : (
           <>
@@ -439,7 +445,7 @@ export default function AdminBillboardPage() {
                     <div className="min-w-0">
                       <CardTitle className="text-base">{item.title}</CardTitle>
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {item.isActive ? <Badge>Active</Badge> : null}
+                        <ActiveBadge isActive={item.isActive} />
                         <Badge variant="outline">{item.mediaType}</Badge>
                       </div>
                       {item.subtitle ? (

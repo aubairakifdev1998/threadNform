@@ -3,18 +3,27 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Heart, Search, ShoppingBag, User } from "lucide-react";
-import { motion, useMotionValueEvent, useScroll, useReducedMotion } from "framer-motion";
+import { Search, ShoppingBag, User } from "lucide-react";
+import {
+  motion,
+  useMotionValueEvent,
+  useScroll,
+  useReducedMotion,
+} from "framer-motion";
 import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { BrandMark } from "@/components/layout/brand-mark";
+import { useCartItemCount } from "@/hooks/use-cart-item-count";
+import { catalogApi } from "@/lib/api";
 import { BRAND } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 
-const navLinks = [
-  { href: "/shop", label: "Shop" },
-  { href: "/category/women", label: "Women" },
-  { href: "/category/men", label: "Men" },
-];
+type NavLink = { href: string; label: string };
+
+function isNavActive(pathname: string, href: string) {
+  if (href === "/shop")
+    return pathname === "/shop" || pathname.startsWith("/products/");
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 export function SiteHeader() {
   const pathname = usePathname();
@@ -22,6 +31,32 @@ export function SiteHeader() {
   const { scrollY } = useScroll();
   const [hidden, setHidden] = useState(false);
   const [compact, setCompact] = useState(false);
+  const [navLinks, setNavLinks] = useState<NavLink[]>([
+    { href: "/shop", label: "Shop" },
+  ]);
+  const cartCount = useCartItemCount();
+
+  useEffect(() => {
+    let cancelled = false;
+    void catalogApi
+      .listDepartments()
+      .then((departments) => {
+        if (cancelled) return;
+        const deptLinks = (departments ?? [])
+          .filter((d) => d.isActive !== false)
+          .map((d) => ({
+            href: `/category/${d.slug}`,
+            label: d.name,
+          }));
+        setNavLinks([{ href: "/shop", label: "Shop" }, ...deptLinks]);
+      })
+      .catch(() => {
+        if (!cancelled) setNavLinks([{ href: "/shop", label: "Shop" }]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useMotionValueEvent(scrollY, "change", (latest) => {
     const prev = scrollY.getPrevious() ?? 0;
@@ -50,9 +85,7 @@ export function SiteHeader() {
       <div
         className={cn(
           "mx-auto transition-all duration-300",
-          compact
-            ? "max-w-5xl px-3 pt-2 sm:pt-3"
-            : "max-w-7xl px-0 pt-0",
+          compact ? "max-w-5xl px-3 pt-2 sm:pt-3" : "max-w-7xl px-0 pt-0",
         )}
       >
         <div
@@ -65,21 +98,28 @@ export function SiteHeader() {
         >
           <div className="flex items-center justify-start gap-3 sm:gap-5">
             <MobileNavigation links={navLinks} />
-            <nav className="hidden items-center gap-6 md:flex" aria-label="Primary">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={cn(
-                    "text-[0.75rem] font-medium uppercase tracking-[0.14em] transition-colors",
-                    pathname === link.href
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {link.label}
-                </Link>
-              ))}
+            <nav
+              className="hidden items-center gap-5 md:flex lg:gap-6"
+              aria-label="Primary"
+            >
+              {navLinks.map((link) => {
+                const active = isNavActive(pathname, link.href);
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "text-[0.75rem] font-medium uppercase tracking-[0.14em] transition-colors",
+                      active
+                        ? "text-primary"
+                        : "text-muted-foreground hover:text-primary",
+                    )}
+                  >
+                    {link.label}
+                  </Link>
+                );
+              })}
             </nav>
           </div>
 
@@ -96,33 +136,38 @@ export function SiteHeader() {
 
           <div className="flex items-center justify-end gap-0.5 sm:gap-1.5">
             <Link
-              href="/search"
-              aria-label="Search"
-              className="inline-flex size-9 items-center justify-center rounded-full text-foreground transition hover:bg-secondary"
+              href="/shop#shop-search"
+              aria-label="Search products"
+              className="inline-flex size-9 items-center justify-center rounded-full text-foreground transition hover:bg-accent hover:text-accent-foreground"
             >
               <Search className="size-4" />
             </Link>
             <Link
-              href="/account"
-              aria-label="Wishlist"
-              className="hidden size-9 items-center justify-center rounded-full text-foreground transition hover:bg-secondary sm:inline-flex"
-            >
-              <Heart className="size-4" />
-            </Link>
-            <Link
               href="/cart"
-              className="inline-flex size-9 items-center justify-center rounded-full bg-foreground text-background transition hover:opacity-90 sm:h-9 sm:w-auto sm:gap-2 sm:px-3.5"
-              aria-label="Cart"
+              className="relative inline-flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-e1 transition hover:bg-[color-mix(in_oklch,var(--primary),black_8%)] sm:h-9 sm:w-auto sm:gap-2 sm:px-3.5"
+              aria-label={
+                cartCount > 0
+                  ? `Cart, ${cartCount} item${cartCount === 1 ? "" : "s"}`
+                  : "Cart"
+              }
             >
               <ShoppingBag className="size-3.5" />
               <span className="hidden text-xs font-medium tracking-wide sm:inline">
                 Cart
               </span>
+              {cartCount > 0 ? (
+                <span
+                  className="absolute -top-1 -right-1 inline-flex min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[0.65rem] font-semibold text-white sm:static sm:min-w-5 sm:bg-primary-foreground/20 sm:text-[0.7rem] sm:text-primary-foreground"
+                  aria-hidden
+                >
+                  {cartCount > 99 ? "99+" : cartCount}
+                </span>
+              ) : null}
             </Link>
             <Link
               href="/account"
               aria-label="Account"
-              className="inline-flex size-9 items-center justify-center rounded-full text-foreground transition hover:bg-secondary"
+              className="inline-flex size-9 items-center justify-center rounded-full text-foreground transition hover:bg-accent hover:text-accent-foreground"
             >
               <User className="size-4" />
             </Link>

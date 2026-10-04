@@ -42,6 +42,7 @@ import { DRIZZLE, type DrizzleDB } from '../../drizzle/drizzle.tokens.js';
 import { containsPattern } from '../../drizzle/like.js';
 import {
   auditLogs,
+  customers,
   inventoryItems,
   orderAddresses,
   orderItems,
@@ -456,6 +457,202 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     };
   }
 
+  async listCustomerDiary(params: {
+    page: number;
+    pageSize: number;
+    q?: string;
+    sort?: 'spend' | 'orders' | 'recent';
+  }): Promise<{
+    items: Array<{
+      customerId: string | null;
+      email: string;
+      phone: string | null;
+      fullName: string | null;
+      status: string | null;
+      orderCount: number;
+      totalSpendPence: number;
+      lastOrderAt: Date;
+      topProductName: string | null;
+      topProductQuantity: number;
+    }>;
+    total: number;
+  }> {
+    /**
+     * Aggregate in application code so we avoid brittle CTE SQL through
+     * drizzle's `execute` binder. Catalogue size for a boutique shop stays
+     * well within a single pass over orders + items.
+     */
+    const sort = params.sort ?? 'spend';
+    const q = params.q?.trim().toLowerCase() ?? '';
+
+    const [orderRows, itemRows, customerRows] = await Promise.all([
+      this.db
+        .select({
+          id: orders.id,
+          customerId: orders.customerId,
+          email: orders.email,
+          phone: orders.phone,
+          status: orders.status,
+          grandTotalPence: orders.grandTotalPence,
+          placedAt: orders.placedAt,
+        })
+        .from(orders),
+      this.db
+        .select({
+          orderId: orderItems.orderId,
+          productName: orderItems.productName,
+          quantity: orderItems.quantity,
+        })
+        .from(orderItems)
+        .innerJoin(orders, eq(orderItems.orderId, orders.id))
+        .where(ne(orders.status, 'CANCELLED')),
+      this.db
+        .select({
+          id: customers.id,
+          email: customers.email,
+          fullName: customers.fullName,
+          phone: customers.phone,
+          status: customers.status,
+        })
+        .from(customers),
+    ]);
+
+    const customersById = new Map(customerRows.map((c) => [c.id, c]));
+    const customersByEmail = new Map(
+      customerRows
+        .filter((c) => typeof c.email === 'string' && c.email.trim())
+        .map((c) => [c.email.trim().toLowerCase(), c]),
+    );
+
+    type Acc = {
+      customerId: string | null;
+      email: string;
+      phone: string | null;
+      orderCount: number;
+      totalSpendPence: number;
+      lastOrderAt: Date;
+      productQty: Map<string, number>;
+    };
+
+    const byEmail = new Map<string, Acc>();
+    const toDate = (value: Date | string | null | undefined) => {
+      if (!value) return new Date(0);
+      const date = value instanceof Date ? value : new Date(value);
+      return Number.isNaN(date.getTime()) ? new Date(0) : date;
+    };
+
+    for (const order of orderRows) {
+      const email =
+        typeof order.email === 'string' ? order.email.trim().toLowerCase() : '';
+      if (!email) continue;
+      const placedAt = toDate(order.placedAt);
+      let acc = byEmail.get(email);
+      if (!acc) {
+        acc = {
+          customerId: order.customerId ?? null,
+          email,
+          phone: order.phone ?? null,
+          orderCount: 0,
+          totalSpendPence: 0,
+          lastOrderAt: placedAt,
+          productQty: new Map(),
+        };
+        byEmail.set(email, acc);
+      }
+      acc.orderCount += 1;
+      if (order.status !== 'CANCELLED') {
+        const spend = Number(order.grandTotalPence ?? 0);
+        acc.totalSpendPence += Number.isFinite(spend) ? spend : 0;
+      }
+      if (placedAt.getTime() > acc.lastOrderAt.getTime()) {
+        acc.lastOrderAt = placedAt;
+      }
+      if (!acc.customerId && order.customerId) {
+        acc.customerId = order.customerId;
+      }
+      if ((!acc.phone || !acc.phone.trim()) && order.phone?.trim()) {
+        acc.phone = order.phone;
+      }
+    }
+
+    const orderEmailById = new Map<string, string>();
+    for (const order of orderRows) {
+      const email =
+        typeof order.email === 'string' ? order.email.trim().toLowerCase() : '';
+      if (email) orderEmailById.set(order.id, email);
+    }
+
+    for (const item of itemRows) {
+      const email = orderEmailById.get(item.orderId);
+      if (!email) continue;
+      const acc = byEmail.get(email);
+      if (!acc) continue;
+      const name =
+        typeof item.productName === 'string' && item.productName.trim()
+          ? item.productName.trim()
+          : 'Unknown product';
+      const qty = Number(item.quantity ?? 0);
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+      acc.productQty.set(name, (acc.productQty.get(name) ?? 0) + qty);
+    }
+
+    let entries = Array.from(byEmail.values()).map((acc) => {
+      const profile =
+        (acc.customerId ? customersById.get(acc.customerId) : undefined) ??
+        customersByEmail.get(acc.email);
+      let topProductName: string | null = null;
+      let topProductQuantity = 0;
+      for (const [name, qty] of acc.productQty) {
+        if (qty > topProductQuantity) {
+          topProductName = name;
+          topProductQuantity = qty;
+        }
+      }
+      return {
+        customerId: profile?.id ?? acc.customerId,
+        email: acc.email,
+        phone: profile?.phone ?? acc.phone,
+        fullName: profile?.fullName ?? null,
+        status: profile?.status ?? null,
+        orderCount: acc.orderCount,
+        totalSpendPence: acc.totalSpendPence,
+        lastOrderAt: acc.lastOrderAt,
+        topProductName,
+        topProductQuantity,
+      };
+    });
+
+    if (q) {
+      entries = entries.filter(
+        (entry) =>
+          entry.email.includes(q) ||
+          (entry.phone ?? '').toLowerCase().includes(q) ||
+          (entry.fullName ?? '').toLowerCase().includes(q),
+      );
+    }
+
+    entries.sort((a, b) => {
+      if (sort === 'orders') {
+        return (
+          b.orderCount - a.orderCount ||
+          b.lastOrderAt.getTime() - a.lastOrderAt.getTime()
+        );
+      }
+      if (sort === 'recent') {
+        return b.lastOrderAt.getTime() - a.lastOrderAt.getTime();
+      }
+      return (
+        b.totalSpendPence - a.totalSpendPence || b.orderCount - a.orderCount
+      );
+    });
+
+    const total = entries.length;
+    const offset = (params.page - 1) * params.pageSize;
+    const items = entries.slice(offset, offset + params.pageSize);
+
+    return { items, total };
+  }
+
   async listOrderTimeline(
     orderId: string,
     options: { customerOnly?: boolean } = {},
@@ -815,6 +1012,51 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       before: input.before ?? null,
       after: input.after ?? null,
     });
+  }
+
+  async listAuditLogs(params: {
+    page: number;
+    pageSize: number;
+    q?: string;
+  }) {
+    const q = params.q?.trim();
+    const where = q
+      ? or(
+          ilike(auditLogs.action, containsPattern(q)),
+          ilike(auditLogs.entityType, containsPattern(q)),
+          ilike(auditLogs.entityId, containsPattern(q)),
+        )
+      : undefined;
+    const [items, [totalRow]] = await Promise.all([
+      this.db
+        .select({
+          id: auditLogs.id,
+          actorType: auditLogs.actorType,
+          actorId: auditLogs.actorId,
+          action: auditLogs.action,
+          entityType: auditLogs.entityType,
+          entityId: auditLogs.entityId,
+          createdAt: auditLogs.createdAt,
+        })
+        .from(auditLogs)
+        .where(where)
+        .orderBy(desc(auditLogs.createdAt))
+        .limit(params.pageSize)
+        .offset((params.page - 1) * params.pageSize),
+      this.db.select({ value: count() }).from(auditLogs).where(where),
+    ]);
+    return {
+      items: items.map((row) => ({
+        id: row.id,
+        actorType: row.actorType,
+        actorId: row.actorId ?? null,
+        action: row.action,
+        entityType: row.entityType,
+        entityId: row.entityId ?? null,
+        createdAt: row.createdAt,
+      })),
+      total: totalRow?.value ?? 0,
+    };
   }
 
   async createReturnRequest(input: {
@@ -1212,7 +1454,7 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       carrier: row.carrier ?? null,
       trackingNumber: row.trackingNumber ?? null,
       trackingUrl: row.trackingUrl ?? null,
-      refundedPence: row.refundedPence,
+      refundedPence: row.refundedPence ?? 0,
       placedAt: row.placedAt,
     };
   }
@@ -1235,9 +1477,9 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       vatPence: row.vatPence,
       netPence: row.netPence,
       lineGrossPence: row.lineGrossPence,
-      quantityShipped: row.quantityShipped,
-      quantityCancelled: row.quantityCancelled,
-      quantityReturned: row.quantityReturned,
+      quantityShipped: row.quantityShipped ?? 0,
+      quantityCancelled: row.quantityCancelled ?? 0,
+      quantityReturned: row.quantityReturned ?? 0,
     };
   }
 

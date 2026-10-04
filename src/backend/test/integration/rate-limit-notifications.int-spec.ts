@@ -75,12 +75,14 @@ describe('Rate limiting & customer notifications', () => {
     expect(statuses[10]).toBe(429);
   });
 
-  it('RL-05 limiter store failure fails open (requests still served)', async () => {
+  it('RL-05 limiter store failure: auth/lookup fail closed; cart still served', async () => {
     await h.db.query(
       'alter function public.hit_rate_limit(text, int, int) rename to hit_rate_limit_off',
     );
     try {
-      expect((await lookup('203.0.113.50')).status).toBe(400);
+      expect((await lookup('203.0.113.50')).status).toBe(429);
+      const cart = await h.http().post(`${API}/carts`);
+      expect(cart.status).toBe(201);
     } finally {
       await h.db.query(
         'alter function public.hit_rate_limit_off(text, int, int) rename to hit_rate_limit',

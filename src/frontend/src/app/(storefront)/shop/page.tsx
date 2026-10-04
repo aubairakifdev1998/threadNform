@@ -76,12 +76,12 @@ export default async function ShopPage({ searchParams }: Props) {
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
+    <div className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
       <Suspense fallback={<ShopPageShimmer />}>
         <ShopCatalogue
           initialProducts={products}
           filters={filters}
-          emptyMessage="No products match these filters. Adjust filters or add catalogue products in admin."
+          emptyMessage="Nothing is listed right now. Try again shortly, or clear any leftover filters."
         />
       </Suspense>
     </div>

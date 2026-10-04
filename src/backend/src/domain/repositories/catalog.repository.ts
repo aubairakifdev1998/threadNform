@@ -160,7 +160,9 @@ export interface CatalogRepository {
     }>,
   ): Promise<Category>;
   deleteCategory(id: string): Promise<void>;
-  listColors(): Promise<Array<{ id: string; name: string; hex: string | null }>>;
+  listColors(): Promise<
+    Array<{ id: string; name: string; hex: string | null }>
+  >;
   createColor(input: {
     name: string;
     hex?: string | null;
@@ -199,9 +201,7 @@ export interface CatalogRepository {
     maxPricePence?: number;
     publicOnly?: boolean;
   }): Promise<{ items: CommerceProduct[]; total: number }>;
-  enrichProductSummaries(
-    products: CommerceProduct[],
-  ): Promise<
+  enrichProductSummaries(products: CommerceProduct[]): Promise<
     Array<
       CommerceProduct & {
         brandName: string | null;

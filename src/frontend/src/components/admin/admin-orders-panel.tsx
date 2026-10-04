@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useQuery,
@@ -9,28 +9,25 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Search } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { ClipboardList, Trash2, XCircle } from "lucide-react";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
 import { AdminListPagination } from "@/components/admin/admin-list-pagination";
+import { DataTable } from "@/components/admin/data-table";
+import { RowActions, type RowAction } from "@/components/admin/row-actions";
+import { ToggleFilter } from "@/components/admin/toggle-filter";
 import {
   AdminOrderReviewSheet,
   orderNeedsPaymentReview,
 } from "@/components/admin/admin-order-review-sheet";
 import {
-  OrderStatusPill,
-  PaymentStatusPill,
-} from "@/components/orders/status-pill";
+  OrderStatusBadge,
+  PaymentStatusBadge,
+  ShippingStatusBadge,
+} from "@/components/status/status-badges";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { PriceDisplay } from "@/components/ui/price";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { adminApi } from "@/lib/api";
 import {
   adminKeys,
@@ -38,12 +35,8 @@ import {
   requireAccessToken,
   useAdminMutation,
   useAdminOrders,
-  useErrorToast,
 } from "@/lib/query/admin";
-import { formatGbp } from "@/lib/money";
 import { formatDate } from "@/lib/orders/presentation";
-import { cn } from "@/lib/utils";
-import { AdminTableShimmer } from "@/components/ui/page-shimmers";
 import type { OrderSummary } from "@/types/api";
 
 const PAGE_SIZE = 15;
@@ -55,6 +48,7 @@ const TABS = [
     key: "review",
     label: "Needs review",
     filter: { paymentStatus: "UNDER_REVIEW" },
+    urgent: true,
   },
   {
     key: "awaiting",
@@ -98,6 +92,16 @@ const CANCELLABLE = new Set([
   "PACKED",
 ]);
 
+const EMPTY_COPY: Record<TabKey, string> = {
+  all: "Orders appear here as soon as customers check out.",
+  review: "Nothing to review — you're all caught up.",
+  awaiting: "No orders are waiting on a bank transfer right now.",
+  fulfil: "Nothing to pack or ship at the moment.",
+  shipped: "No orders are currently in transit.",
+  done: "No completed orders in this period yet.",
+  cancelled: "No cancelled orders — that's a good sign.",
+};
+
 function primaryAction(order: OrderSummary) {
   if (
     order.status !== "CANCELLED" &&
@@ -116,15 +120,27 @@ function primaryAction(order: OrderSummary) {
   return { label: "Open", emphasis: false };
 }
 
+const TAB_KEYS = new Set<string>(TABS.map((t) => t.key));
+
 export function AdminOrdersPanel() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [tab, setTab] = useState<TabKey>("all");
+  // ?queue=<key> lets the dashboard link straight into a work queue.
+  const requestedQueue = searchParams.get("queue");
+  const [tab, setTab] = useState<TabKey>(
+    requestedQueue && TAB_KEYS.has(requestedQueue)
+      ? (requestedQueue as TabKey)
+      : "all",
+  );
   const [searchDraft, setSearchDraft] = useState("");
-  const [search, setSearch] = useState("");
+  const search = useDebouncedValue(searchDraft.trim());
   const [page, setPage] = useState(1);
   // The open order lives in the URL (?review=<id>) so links and refresh work.
   const reviewId = searchParams.get("review");
+
+  useEffect(() => {
+    setPage(1);
+  }, [tab, search]);
 
   const filter = TABS.find((t) => t.key === tab)?.filter ?? {};
   const orders = useAdminOrders({
@@ -133,7 +149,7 @@ export function AdminOrdersPanel() {
     page,
     pageSize: PAGE_SIZE,
   });
-  useErrorToast(orders.error, "Failed to load orders");
+
   // Tab totals depend only on the search, so paging and tab switches reuse them.
   const tabCounts = useQuery({
     queryKey: adminKeys.orderCounts(search),
@@ -158,12 +174,10 @@ export function AdminOrdersPanel() {
     placeholderData: keepPreviousData,
   });
 
-  const items: OrderSummary[] = orders.isError ? [] : (orders.data?.items ?? []);
+  const items: OrderSummary[] = orders.data?.items ?? [];
   const total = orders.data?.total ?? 0;
   const counts = tabCounts.data ?? {};
-  // Filter changes show the shimmer until the new page arrives; revisiting a
-  // cached tab or page renders instantly.
-  const loading = orders.isPending || orders.isPlaceholderData;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const queryClient = useQueryClient();
   const refresh = () =>
@@ -230,254 +244,205 @@ export function AdminOrdersPanel() {
     if (!open) router.replace("/admin/orders", { scroll: false });
   }
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const columns = useMemo<ColumnDef<OrderSummary, unknown>[]>(
+    () => [
+      {
+        accessorKey: "orderNumber",
+        header: "Order",
+        meta: { primary: true, label: "Order" },
+        cell: ({ row }) => (
+          <div className="min-w-0">
+            <button
+              type="button"
+              className="text-numeric text-left font-medium underline-offset-4 hover:underline"
+              onClick={() => openReview(row.original.id)}
+            >
+              {row.original.orderNumber}
+            </button>
+            <p className="text-xs text-muted-foreground">
+              {formatDate(
+                row.original.placedAt ?? row.original.createdAt,
+                true,
+              )}
+            </p>
+          </div>
+        ),
+      },
+      {
+        accessorKey: "email",
+        header: "Customer",
+        meta: { secondary: true, className: "max-w-[14rem]" },
+        cell: ({ row }) => (
+          <span className="block truncate text-sm text-muted-foreground">
+            {row.original.email ?? "—"}
+          </span>
+        ),
+      },
+      {
+        accessorKey: "status",
+        header: "Order status",
+        cell: ({ row }) => <OrderStatusBadge status={row.original.status} />,
+      },
+      {
+        accessorKey: "paymentStatus",
+        header: "Payment",
+        cell: ({ row }) => (
+          <PaymentStatusBadge status={row.original.paymentStatus} />
+        ),
+      },
+      {
+        accessorKey: "shippingStatus",
+        header: "Fulfilment",
+        meta: { secondary: true },
+        cell: ({ row }) =>
+          row.original.shippingStatus ? (
+            <ShippingStatusBadge status={row.original.shippingStatus} />
+          ) : (
+            <span className="text-sm text-muted-foreground">—</span>
+          ),
+      },
+      {
+        accessorKey: "grandTotalPence",
+        header: "Total",
+        meta: { align: "right" },
+        cell: ({ row }) => (
+          <div>
+            <PriceDisplay
+              pence={row.original.grandTotalPence ?? row.original.totalPence}
+              size="sm"
+            />
+            {row.original.refundedPence ? (
+              <p className="text-numeric text-xs text-muted-foreground">
+                −
+                {new Intl.NumberFormat("en-GB", {
+                  style: "currency",
+                  currency: "GBP",
+                }).format(row.original.refundedPence / 100)}{" "}
+                refunded
+              </p>
+            ) : null}
+          </div>
+        ),
+      },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        meta: { align: "right", cardFooter: true },
+        cell: ({ row }) => {
+          const order = row.original;
+          const primary = primaryAction(order);
+          const secondary: RowAction[] = [
+            ...(NEXT[order.status] ?? []).map((next) => ({
+              label: next.label,
+              onSelect: () => void transition(order.id, next.status),
+            })),
+            ...(CANCELLABLE.has(order.status)
+              ? [
+                  {
+                    label: "Cancel order",
+                    icon: <XCircle aria-hidden />,
+                    destructive: true,
+                    separated: true,
+                    onSelect: () => void transition(order.id, "CANCELLED"),
+                  },
+                ]
+              : []),
+            {
+              label: "Delete permanently",
+              icon: <Trash2 aria-hidden />,
+              destructive: true,
+              separated: !CANCELLABLE.has(order.status),
+              onSelect: () => void remove(order.id, order.orderNumber),
+            },
+          ];
 
-  function RowActions({ order }: { order: OrderSummary }) {
-    const primary = primaryAction(order);
-    return (
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant={primary.emphasis ? "default" : "outline"}
-          onClick={() => openReview(order.id)}
-        >
-          {primary.label}
-        </Button>
-        {(NEXT[order.status] ?? []).map((next) => (
-          <Button
-            key={next.status}
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => void transition(order.id, next.status)}
-          >
-            {next.label}
-          </Button>
-        ))}
-        {CANCELLABLE.has(order.status) ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="text-destructive hover:text-destructive"
-            onClick={() => void transition(order.id, "CANCELLED")}
-          >
-            Cancel
-          </Button>
-        ) : null}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="text-muted-foreground"
-          onClick={() => void remove(order.id, order.orderNumber)}
-        >
-          Delete
-        </Button>
-      </div>
-    );
-  }
+          return (
+            <div className="flex items-center justify-end gap-1">
+              <Button
+                type="button"
+                size="sm"
+                variant={primary.emphasis ? "default" : "outline"}
+                onClick={() => openReview(order.id)}
+              >
+                {primary.label}
+              </Button>
+              <RowActions
+                label={`order ${order.orderNumber}`}
+                actions={secondary}
+              />
+            </div>
+          );
+        },
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [page, items.length],
+  );
 
   return (
     <div className="space-y-6">
       <AdminPageHeader
         title="Orders"
-        description="Work through payment reviews, then ship and refund from each order. Payment evidence is also listed under Payments."
+        description="Work through payment reviews, then ship and refund from each order."
       />
 
-      <div className="space-y-3">
-        <div
-          role="tablist"
-          aria-label="Order queues"
-          className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1 md:flex-wrap md:overflow-visible"
-        >
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              role="tab"
-              type="button"
-              aria-selected={tab === t.key}
-              onClick={() => {
-                setTab(t.key);
-                setPage(1);
-              }}
-              className={cn(
-                "inline-flex h-9 shrink-0 items-center gap-2 rounded-md border px-3 text-sm transition",
-                tab === t.key
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-card hover:bg-secondary",
-              )}
+      <DataTable
+        caption="Orders"
+        columns={columns}
+        data={items}
+        getRowId={(row) => row.id}
+        isLoading={orders.isPending}
+        isRefreshing={orders.isPlaceholderData}
+        isError={orders.isError}
+        error={orders.error}
+        onRetry={() => void orders.refetch()}
+        searchValue={searchDraft}
+        onSearchChange={setSearchDraft}
+        searchPlaceholder="Order number, email or phone"
+        toolbar={
+          <ToggleFilter
+            label="Order queues"
+            value={tab}
+            onChange={(next) => setTab(next)}
+            options={TABS.map((t) => ({
+              value: t.key,
+              label: t.label,
+              count: counts[t.key],
+              urgentWhenCounted: "urgent" in t ? t.urgent : false,
+            }))}
+          />
+        }
+        empty={{
+          icon: ClipboardList,
+          title: search
+            ? `No orders match “${search}”`
+            : "Nothing in this queue",
+          description: search
+            ? "Try an order number, the customer's email, or their phone number."
+            : EMPTY_COPY[tab],
+          action: search ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSearchDraft("")}
             >
-              {t.label}
-              {counts[t.key] !== undefined ? (
-                <span
-                  className={cn(
-                    "rounded-full px-1.5 text-xs tabular-nums",
-                    tab === t.key
-                      ? "bg-background/20"
-                      : t.key === "review" && counts[t.key]
-                        ? "bg-warning/20 font-semibold"
-                        : "bg-secondary",
-                  )}
-                >
-                  {counts[t.key]}
-                </span>
-              ) : null}
-            </button>
-          ))}
-        </div>
-        <form
-          className="relative w-full md:max-w-sm"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setSearch(searchDraft.trim());
-            setPage(1);
-          }}
-        >
-          <Search
-            className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-            aria-hidden
-          />
-          <Input
-            value={searchDraft}
-            onChange={(e) => setSearchDraft(e.target.value)}
-            placeholder="Order number, email or phone"
-            className="pl-9"
-            aria-label="Search orders"
-          />
-        </form>
-      </div>
-
-      {loading ? (
-        <AdminTableShimmer />
-      ) : items.length === 0 ? (
-        <Card>
-          <CardContent className="py-14 text-center text-sm text-muted-foreground">
-            {search
-              ? `No orders match “${search}”.`
-              : tab === "review"
-                ? "Nothing to review — you're all caught up."
-                : "No orders here yet."}
-            {search ? (
-              <button
-                type="button"
-                className="ml-2 underline underline-offset-4"
-                onClick={() => {
-                  setSearch("");
-                  setSearchDraft("");
-                }}
-              >
-                Clear search
-              </button>
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          {/* Phones: stacked cards */}
-          <ul className="space-y-3 md:hidden">
-            {items.map((order) => (
-              <li
-                key={order.id}
-                className="rounded-lg border border-border bg-card p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <button
-                    type="button"
-                    className="text-left"
-                    onClick={() => openReview(order.id)}
-                  >
-                    <p className="font-medium">{order.orderNumber}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {formatDate(order.placedAt ?? order.createdAt, true)}
-                    </p>
-                    {order.email ? (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {order.email}
-                      </p>
-                    ) : null}
-                  </button>
-                  <p className="font-semibold tabular-nums">
-                    {formatGbp(order.grandTotalPence ?? order.totalPence)}
-                  </p>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <OrderStatusPill status={order.status} />
-                  <PaymentStatusPill status={order.paymentStatus} />
-                </div>
-                <div className="mt-3 border-t border-border pt-3">
-                  <RowActions order={order} />
-                </div>
-              </li>
-            ))}
-          </ul>
-
-          {/* Desktop: table */}
-          <Card className="hidden md:block">
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Order</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Payment</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((order) => (
-                    <TableRow key={order.id}>
-                      <TableCell>
-                        <button
-                          type="button"
-                          className="text-left font-medium underline-offset-4 hover:underline"
-                          onClick={() => openReview(order.id)}
-                        >
-                          {order.orderNumber}
-                        </button>
-                        <p className="text-xs text-muted-foreground">
-                          {formatDate(order.placedAt ?? order.createdAt, true)}
-                        </p>
-                      </TableCell>
-                      <TableCell className="max-w-[14rem] truncate text-sm text-muted-foreground">
-                        {order.email ?? "—"}
-                      </TableCell>
-                      <TableCell>
-                        <OrderStatusPill status={order.status} />
-                      </TableCell>
-                      <TableCell>
-                        <PaymentStatusPill status={order.paymentStatus} />
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatGbp(order.grandTotalPence ?? order.totalPence)}
-                        {order.refundedPence ? (
-                          <p className="text-xs text-muted-foreground">
-                            −{formatGbp(order.refundedPence)} refunded
-                          </p>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        <RowActions order={order} />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          <AdminListPagination
-            page={page}
-            totalPages={totalPages}
-            total={total}
-            pageSize={PAGE_SIZE}
-            onPageChange={setPage}
-          />
-        </>
-      )}
+              Clear search
+            </Button>
+          ) : undefined,
+        }}
+        footer={
+          !orders.isPending && !orders.isError && total > 0 ? (
+            <AdminListPagination
+              page={page}
+              totalPages={totalPages}
+              total={total}
+              pageSize={PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          ) : null
+        }
+      />
 
       <p className="text-xs text-muted-foreground">
         Bank transfer evidence can also be reviewed in bulk under{" "}

@@ -17,13 +17,17 @@ export class PermissionsGuard implements CanActivate {
       PERMISSIONS_KEY,
       [context.getHandler(), context.getClass()],
     );
-    if (!permissions?.length) {
-      return true;
-    }
-
     const request = context.switchToHttp().getRequest<{
       adminUser?: { role: AdminRole };
     }>();
+    // Admin routes must declare permissions — never default-allow.
+    if (!permissions?.length) {
+      if (request.adminUser) {
+        throw new ForbiddenException('Insufficient permissions');
+      }
+      return true;
+    }
+
     const role = request.adminUser?.role;
     if (!role || !permissions.every((p) => hasPermission(role, p))) {
       throw new ForbiddenException('Insufficient permissions');

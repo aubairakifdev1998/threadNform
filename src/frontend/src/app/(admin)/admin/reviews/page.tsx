@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -31,6 +30,9 @@ import {
 import { adminApi, siteAdminApi } from "@/lib/api";
 import { tokenStore } from "@/lib/auth/session";
 import { ListBlockShimmer } from "@/components/ui/page-shimmers";
+import { EmptyState } from "@/components/ui/data-states";
+import { PublishBadge } from "@/components/status/status-badges";
+import { MessageSquare } from "lucide-react";
 import type { CustomerReview } from "@/types/api";
 
 const PAGE_SIZE = 8;
@@ -264,14 +266,17 @@ export default function AdminReviewsPage() {
       </Card>
 
       <div className="space-y-3">
-        <h2 className="text-lg font-medium">All reviews</h2>
+        <h2 className="label-meta text-muted-foreground">All reviews</h2>
         {loading ? (
           <ListBlockShimmer rows={3} />
         ) : !items.length ? (
           <Card>
-            <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              No reviews yet.
-            </CardContent>
+            <EmptyState
+              icon={MessageSquare}
+              title="No reviews yet"
+              description="Add a customer note above to show social proof on the homepage."
+              className="py-10"
+            />
           </Card>
         ) : (
           <>
@@ -283,11 +288,7 @@ export default function AdminReviewsPage() {
                       {item.customerName} · {"★".repeat(item.rating)}
                     </CardTitle>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {item.isPublished ? (
-                        <Badge>Published</Badge>
-                      ) : (
-                        <Badge variant="outline">Hidden</Badge>
-                      )}
+                      <PublishBadge isPublished={item.isPublished} />
                     </div>
                     <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
                       {item.body}

@@ -33,6 +33,8 @@ export const adminKeys = {
     [...adminKeys.all, "products", productId, "variants"] as const,
   customers: (params: CustomerListParams) =>
     [...adminKeys.all, "customers", "list", params] as const,
+  customerDiary: (params: CustomerDiaryParams) =>
+    [...adminKeys.all, "customers", "diary", params] as const,
   customer: (id: string) => [...adminKeys.all, "customers", id] as const,
   inventory: (params: InventoryListParams) =>
     [...adminKeys.all, "inventory", params] as const,
@@ -67,6 +69,25 @@ export type InventoryListParams = {
   productId?: string;
 };
 export type CustomerListParams = { page: number; pageSize: number; q?: string };
+export type CustomerDiaryParams = {
+  page: number;
+  pageSize: number;
+  q?: string;
+  sort?: "spend" | "orders" | "recent";
+};
+
+export type CustomerDiaryRow = {
+  customerId: string | null;
+  email: string;
+  phone: string | null;
+  fullName: string | null;
+  status: string | null;
+  orderCount: number;
+  totalSpendPence: number;
+  lastOrderAt: string;
+  topProductName: string | null;
+  topProductQuantity: number;
+};
 
 export type CustomerRow = {
   id: string;
@@ -186,6 +207,40 @@ export function useAdminCustomers(params: CustomerListParams) {
         : { items: result.items ?? [], total: result.total ?? 0 };
     },
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useAdminCustomerDiary(params: CustomerDiaryParams) {
+  return useQuery({
+    queryKey: adminKeys.customerDiary(params),
+    queryFn: async () => {
+      const result = await adminApi.listCustomerDiary(
+        requireAccessToken(),
+        params,
+      );
+      const items = Array.isArray(result?.items) ? result.items : [];
+      const total =
+        typeof result?.total === "number" && Number.isFinite(result.total)
+          ? result.total
+          : items.length;
+      return {
+        items: items.map((row) => ({
+          customerId: row.customerId ?? null,
+          email: row.email ?? "",
+          phone: row.phone ?? null,
+          fullName: row.fullName ?? null,
+          status: row.status ?? null,
+          orderCount: Number(row.orderCount ?? 0),
+          totalSpendPence: Number(row.totalSpendPence ?? 0),
+          lastOrderAt: row.lastOrderAt ?? new Date(0).toISOString(),
+          topProductName: row.topProductName ?? null,
+          topProductQuantity: Number(row.topProductQuantity ?? 0),
+        })),
+        total,
+      };
+    },
+    placeholderData: keepPreviousData,
+    retry: 1,
   });
 }
 

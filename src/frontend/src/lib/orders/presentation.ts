@@ -6,7 +6,7 @@
 
 export type Tone = "neutral" | "info" | "warning" | "success" | "danger";
 
-type Meta = { label: string; tone: Tone };
+export type Meta = { label: string; tone: Tone };
 
 const ORDER: Record<string, Meta> = {
   PENDING_PAYMENT: { label: "Awaiting payment", tone: "warning" },

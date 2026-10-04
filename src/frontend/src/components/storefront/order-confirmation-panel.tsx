@@ -113,7 +113,7 @@ function OrderAccessRecovery({
       <div className="flex flex-wrap gap-3">
         <Link
           href={`/login?next=${encodeURIComponent(`/orders/${orderNumber}`)}`}
-          className="inline-flex h-10 items-center bg-foreground px-5 text-sm text-background"
+          className="inline-flex h-10 items-center bg-primary px-5 text-sm text-primary-foreground shadow-e1"
         >
           Sign in
         </Link>
@@ -325,6 +325,122 @@ function ProofDropzone({
   );
 }
 
+function ReturnRequestCard({
+  orderNumber,
+  items,
+  onDone,
+}: {
+  orderNumber: string;
+  items: NonNullable<OrderDetail["items"]>;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [qty, setQty] = useState<Record<string, number>>({});
+  const [busy, setBusy] = useState(false);
+
+  const returnable = items
+    .map((item) => ({
+      ...item,
+      max: Math.max(
+        0,
+        (item.quantityShipped ?? 0) - (item.quantityReturned ?? 0),
+      ),
+    }))
+    .filter((item) => item.max > 0);
+
+  if (!returnable.length) return null;
+
+  async function submit() {
+    const lines = returnable
+      .map((item) => ({
+        orderItemId: item.id,
+        quantity: qty[item.id] ?? 0,
+      }))
+      .filter((line) => line.quantity > 0);
+    if (!lines.length) {
+      toast.error("Choose at least one item to return");
+      return;
+    }
+    const token = await getFreshAccessToken();
+    if (!token) {
+      toast.error("Sign in to request a return");
+      return;
+    }
+    setBusy(true);
+    try {
+      await ordersApi.requestReturn(
+        orderNumber,
+        {
+          reason: reason.trim() || undefined,
+          items: lines,
+        },
+        token,
+      );
+      toast.success("Return requested");
+      onDone();
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError ? error.message : "Could not request return",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Request a return">
+      <p className="mb-4 text-sm text-muted-foreground">
+        Only shipped units can be returned. We will review your request and
+        confirm next steps by email.
+      </p>
+      <ul className="mb-4 space-y-3">
+        {returnable.map((item) => (
+          <li
+            key={item.id}
+            className="flex items-center justify-between gap-3 text-sm"
+          >
+            <div className="min-w-0">
+              <p className="font-medium">{item.productName}</p>
+              <p className="text-xs text-muted-foreground">
+                Up to {item.max} returnable
+              </p>
+            </div>
+            <Input
+              type="number"
+              min={0}
+              max={item.max}
+              value={qty[item.id] ?? 0}
+              onChange={(e) => {
+                const n = Math.floor(Number(e.target.value));
+                setQty((prev) => ({
+                  ...prev,
+                  [item.id]: Number.isFinite(n)
+                    ? Math.min(Math.max(n, 0), item.max)
+                    : 0,
+                }));
+              }}
+              className="h-8 w-16 text-right tabular-nums"
+            />
+          </li>
+        ))}
+      </ul>
+      <Label htmlFor="return-reason" className="text-xs">
+        Reason (optional)
+      </Label>
+      <Input
+        id="return-reason"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Wrong size, damaged, changed mind…"
+        className="mt-1 mb-4"
+      />
+      <Button type="button" disabled={busy} onClick={() => void submit()}>
+        {busy ? "Submitting…" : "Submit return request"}
+      </Button>
+    </Card>
+  );
+}
+
 export function OrderConfirmationPanel({
   orderNumber,
 }: {
@@ -477,6 +593,15 @@ export function OrderConfirmationPanel({
   const steps = progressSteps(order.status, paymentStatus);
   const shipments = order.shipments ?? [];
   const refunds = order.refunds ?? [];
+  const canRequestReturn =
+    (order.status === "SHIPPED" || order.status === "DELIVERED") &&
+    (order.items ?? []).some(
+      (item) =>
+        Math.max(
+          0,
+          (item.quantityShipped ?? 0) - (item.quantityReturned ?? 0),
+        ) > 0,
+    );
   const refunded = order.refundedPence ?? 0;
   const itemName = (id: string) =>
     order.items?.find((i) => i.id === id)?.productName ?? "Item";
@@ -716,7 +841,7 @@ export function OrderConfirmationPanel({
                           href={shipment.trackingUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-foreground px-3 text-sm font-medium text-background"
+                          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground shadow-e1"
                         >
                           Track parcel{" "}
                           <ExternalLink className="size-3.5" aria-hidden />
@@ -780,6 +905,14 @@ export function OrderConfirmationPanel({
               })}
             </ul>
           </Card>
+
+          {canRequestReturn ? (
+            <ReturnRequestCard
+              orderNumber={orderNumber}
+              items={order.items ?? []}
+              onDone={() => void refresh()}
+            />
+          ) : null}
 
           {order.timeline?.length ? (
             <Card title="Order activity">

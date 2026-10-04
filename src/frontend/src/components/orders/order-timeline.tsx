@@ -30,7 +30,7 @@ export function OrderTimeline({
             aria-hidden
             className={cn(
               "absolute top-1.5 -left-[1.4rem] size-2.5 rounded-full border-2 border-background",
-              index === 0 ? "bg-foreground" : "bg-muted-foreground/40",
+              index === 0 ? "bg-primary" : "bg-primary/30",
             )}
           />
           <p className="text-sm font-medium">

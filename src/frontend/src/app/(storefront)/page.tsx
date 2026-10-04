@@ -4,6 +4,8 @@ import {
   HeroSpotlight,
   TextGenerateEffect,
 } from "@/components/aceternity/spotlight-hero";
+import { Section, SectionHeader } from "@/components/layout/section";
+import { CategoryOne } from "@/components/commercn/categories/category-01";
 import { ProductGrid } from "@/components/storefront/product-grid";
 import { ReviewsSection } from "@/components/storefront/reviews-section";
 import { catalogApi, siteApi } from "@/lib/api";
@@ -51,69 +53,30 @@ async function getHomeData() {
 export default async function HomePage() {
   const { products, billboard, reviews, filters } = await getHomeData();
 
-  const departments = filters?.departments ?? [];
-  const categories = (filters?.categories ?? []).slice(0, 6);
-  const women = departments.find((d) => d.slug === "women");
-  const men = departments.find((d) => d.slug === "men");
+  const departments = (filters?.departments ?? []).filter(
+    (department) => department.isActive !== false,
+  );
+  const categories = (filters?.categories ?? []).filter(
+    (category) => category.isActive !== false,
+  );
 
-  const departmentTiles = [
-    women
-      ? {
-          href: `/shop?departmentId=${women.id}`,
-          label: women.name,
-          caption: "Shop the edit",
-          imageUrl: women.imageUrl ?? null,
-        }
-      : null,
-    men
-      ? {
-          href: `/shop?departmentId=${men.id}`,
-          label: men.name,
-          caption: "Shop the edit",
-          imageUrl: men.imageUrl ?? null,
-        }
-      : null,
-  ].filter(Boolean) as Array<{
-    href: string;
-    label: string;
-    caption: string;
-    imageUrl: string | null;
-  }>;
-
-  const categoryTiles = categories.map((category) => ({
-    href: `/shop?categoryId=${category.id}`,
-    label: category.name,
-    caption: "Category",
-    imageUrl: category.imageUrl ?? null,
+  const departmentItems = departments.map((department) => ({
+    id: department.id,
+    href: `/shop?departmentId=${department.id}`,
+    title: department.name,
+    count: "Department",
+    imageSrc: department.imageUrl ?? null,
   }));
 
-  const browseTiles =
-    categoryTiles.length > 0
-      ? [
-          ...departmentTiles.slice(0, 2),
-          ...categoryTiles.slice(
-            0,
-            Math.max(1, 6 - departmentTiles.slice(0, 2).length),
-          ),
-        ]
-      : departmentTiles.length > 0
-        ? [
-            ...departmentTiles,
-            {
-              href: "/shop",
-              label: "All products",
-              caption: "Browse",
-              imageUrl: null as string | null,
-            },
-          ]
-        : [
-            {
-              href: "/shop",
-              label: "Shop",
-              caption: "Browse the catalogue",
-              imageUrl: null as string | null,
-            },
-          ];
+  const categoryItems = categories.map((category) => ({
+    id: category.id,
+    href: `/shop?categoryId=${category.id}`,
+    title: category.name,
+    count: "Category",
+    imageSrc: category.imageUrl ?? null,
+  }));
+
+  const primaryDept = departmentItems[0];
 
   return (
     <>
@@ -123,92 +86,65 @@ export default async function HomePage() {
         subtitle={billboard?.subtitle ?? BRAND.tagline}
         primaryHref={billboard?.ctaHref ?? "/shop"}
         primaryLabel={billboard?.ctaLabel ?? "Shop now"}
-        secondaryHref={billboard?.secondaryCtaHref ?? "/shop"}
-        secondaryLabel={billboard?.secondaryCtaLabel ?? "View catalogue"}
+        secondaryHref={
+          billboard?.secondaryCtaHref ?? primaryDept?.href ?? "/shop"
+        }
+        secondaryLabel={
+          billboard?.secondaryCtaLabel ??
+          (primaryDept ? primaryDept.title : "Browse the shop")
+        }
         mediaType={billboard?.mediaType ?? "NONE"}
         mediaUrl={billboard?.mediaUrl}
         posterUrl={billboard?.posterUrl}
       />
 
-      <section className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
-          <div className="min-w-0 flex-1">
-            <h2 className="heading-display text-[clamp(1.75rem,7vw,3rem)] leading-[1.05] sm:text-4xl md:text-5xl">
-              <TextGenerateEffect words="Latest pieces" />
-            </h2>
-            <p className="mt-3 max-w-md text-sm text-muted-foreground">
-              Products published from the admin catalogue.
-            </p>
-          </div>
-          <Link
-            href="/shop"
-            className="shrink-0 self-start whitespace-nowrap text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline sm:self-auto sm:pb-1"
-          >
-            See all
-          </Link>
-        </div>
-
+      <Section space="loose">
+        <SectionHeader
+          eyebrow="New"
+          title={<TextGenerateEffect words="Latest pieces" />}
+          description="New arrivals and restocks from the current edit."
+          action={
+            <Link
+              href="/shop"
+              className="label-eyebrow text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              See all
+            </Link>
+          }
+        />
         <div className="mt-8 sm:mt-12">
           <ProductGrid
             products={products}
-            emptyMessage="Publish products in Admin → Products to show them here."
+            emptyMessage="The shop is being restocked. Check back shortly, or browse again soon."
           />
         </div>
-      </section>
+      </Section>
 
-      <section className="border-y border-border bg-secondary/40 py-12 sm:py-16 lg:py-20">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="mb-6 sm:mb-8">
-            <h2 className="heading-display text-[clamp(1.75rem,7vw,2.5rem)] leading-[1.05] sm:text-4xl">
-              Shop by
-            </h2>
-            <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-              Driven by departments and categories configured in admin.
-            </p>
-          </div>
-          <div
-            className={`grid gap-px bg-border ${
-              browseTiles.length >= 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"
-            }`}
-          >
-            {browseTiles.map((item) => (
-              <Link
-                key={`${item.href}-${item.label}`}
-                href={item.href}
-                className="group relative flex min-h-48 flex-col justify-end overflow-hidden bg-background p-6 transition sm:min-h-56 sm:p-8"
-              >
-                {item.imageUrl ? (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={item.imageUrl}
-                      alt=""
-                      className="absolute inset-0 h-full w-full object-cover transition duration-700 group-hover:scale-105"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/25 to-black/5" />
-                  </>
-                ) : (
-                  <div className="absolute inset-0 bg-secondary/50 transition group-hover:bg-secondary/70" />
-                )}
-                <span
-                  className={`relative z-10 text-[0.65rem] uppercase tracking-[0.2em] ${
-                    item.imageUrl ? "text-white/75" : "text-muted-foreground"
-                  }`}
-                >
-                  {item.caption}
-                </span>
-                <span
-                  className={`heading-display relative z-10 mt-2 text-2xl leading-tight transition-transform duration-500 group-hover:translate-x-1 sm:text-3xl ${
-                    item.imageUrl ? "text-white" : "text-foreground"
-                  }`}
-                >
-                  {item.label}
-                </span>
-              </Link>
-            ))}
-          </div>
+      {departmentItems.length > 0 ? (
+        <div className="border-y border-border bg-secondary/30">
+          <Section space="loose">
+            <CategoryOne
+              title="Shop by department"
+              description="Departments from your catalogue — managed in admin, shown here automatically."
+              viewAllHref="/shop"
+              viewAllLabel="All products"
+              items={departmentItems}
+            />
+          </Section>
         </div>
-      </section>
+      ) : null}
+
+      {categoryItems.length > 0 ? (
+        <Section space="loose">
+          <CategoryOne
+            title="Shop by category"
+            description="Product types within a department — tracksuits, trainers, and the rest of the edit."
+            viewAllHref="/shop"
+            viewAllLabel="Browse shop"
+            items={categoryItems}
+          />
+        </Section>
+      ) : null}
 
       <ReviewsSection reviews={reviews} />
 
@@ -223,15 +159,9 @@ export default async function HomePage() {
           <div className="mt-8 flex justify-center sm:mt-10">
             <Link
               href="/shop"
-              className="relative inline-flex w-full max-w-xs overflow-hidden p-px sm:w-auto sm:max-w-none"
+              className="inline-flex h-12 items-center justify-center bg-primary px-8 text-sm font-medium tracking-wide text-primary-foreground shadow-e2 transition hover:bg-[color-mix(in_oklch,var(--primary),black_8%)]"
             >
-              <span
-                className="absolute inset-[-100%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_90deg_at_50%_50%,transparent_0%,oklch(0.35_0.02_265)_50%,transparent_100%)] opacity-70 motion-reduce:hidden"
-                aria-hidden
-              />
-              <span className="relative z-10 inline-flex h-12 w-full items-center justify-center bg-foreground px-8 text-sm font-medium tracking-wide text-background sm:w-auto">
-                Enter the store →
-              </span>
+              Enter the store →
             </Link>
           </div>
         </div>

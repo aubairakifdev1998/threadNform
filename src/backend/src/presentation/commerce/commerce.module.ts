@@ -22,16 +22,24 @@ import { PermissionsGuard } from '../common/guards/permissions.guard.js';
 import { RolesGuard } from '../common/guards/roles.guard.js';
 import { CatalogExtrasController } from './catalog-extras.controller.js';
 import { CommerceController } from './commerce.controller.js';
+import { CartCheckoutController } from './cart-checkout.controller.js';
+import { AdminCatalogController } from './admin-catalog.controller.js';
+import { AdminOrdersController } from './admin-orders.controller.js';
+import { OrderDetailLoader } from './order-detail.loader.js';
 import { SiteContentController } from './site-content.controller.js';
 
 @Module({
   imports: [SupabaseModule, AuthModule, StorageModule],
   controllers: [
     CommerceController,
+    CartCheckoutController,
+    AdminCatalogController,
+    AdminOrdersController,
     CatalogExtrasController,
     SiteContentController,
   ],
   providers: [
+    OrderDetailLoader,
     CheckoutUseCase,
     SubmitPaymentProofUseCase,
     ApprovePaymentUseCase,

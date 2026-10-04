@@ -51,6 +51,18 @@ export function MobileNavigation({ links }: { links: NavLink[] }) {
             </Link>
           ))}
           <Link
+            href="/shop#shop-search"
+            className="text-base uppercase tracking-[0.12em] text-muted-foreground"
+          >
+            Search
+          </Link>
+          <Link
+            href="/cart"
+            className="text-base uppercase tracking-[0.12em] text-muted-foreground"
+          >
+            Cart
+          </Link>
+          <Link
             href="/account"
             className="text-base uppercase tracking-[0.12em] text-muted-foreground"
           >

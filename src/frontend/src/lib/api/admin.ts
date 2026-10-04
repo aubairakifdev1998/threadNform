@@ -538,11 +538,63 @@ export const adminApi = {
     });
   },
 
+  listAuditLogs(
+    accessToken: string,
+    params?: { page?: number; pageSize?: number; q?: string },
+  ) {
+    return apiRequest<{
+      items: Array<{
+        id: string;
+        actorType: string;
+        actorId: string | null;
+        action: string;
+        entityType: string;
+        entityId: string | null;
+        createdAt: string;
+      }>;
+      total?: number;
+    }>("/admin/audit-logs", {
+      accessToken,
+      searchParams: params,
+      cache: "no-store",
+    });
+  },
+
   listCustomers(
     accessToken: string,
     params?: { page?: number; pageSize?: number; q?: string },
   ) {
     return apiRequest("/admin/customers", {
+      accessToken,
+      searchParams: params,
+      cache: "no-store",
+    });
+  },
+
+  listCustomerDiary(
+    accessToken: string,
+    params?: {
+      page?: number;
+      pageSize?: number;
+      q?: string;
+      sort?: "spend" | "orders" | "recent";
+    },
+  ) {
+    return apiRequest<{
+      items: Array<{
+        customerId: string | null;
+        email: string;
+        phone: string | null;
+        fullName: string | null;
+        status: string | null;
+        orderCount: number;
+        totalSpendPence: number;
+        lastOrderAt: string;
+        topProductName: string | null;
+        topProductQuantity: number;
+      }>;
+      total: number;
+    }>("/admin/customers/diary", {
       accessToken,
       searchParams: params,
       cache: "no-store",

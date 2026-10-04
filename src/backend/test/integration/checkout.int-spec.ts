@@ -447,6 +447,12 @@ describe('Checkout', () => {
       .send(checkoutBody(cart.cartId, standard.id, user.email));
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('ACCOUNT_BLOCKED');
+
+    // Guest checkout with the blocked email is also refused.
+    const guest = await readyCart();
+    const guestRes = await placeGuest(guest.cart, user.email);
+    expect(guestRes.status).toBe(403);
+    expect(guestRes.body.error.code).toBe('ACCOUNT_BLOCKED');
   });
 
   it('CHK-20 admin settings are enforced: guest checkout off, min order, phone, notes, maintenance', async () => {

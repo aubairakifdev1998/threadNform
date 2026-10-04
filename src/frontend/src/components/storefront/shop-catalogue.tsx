@@ -1,11 +1,38 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search } from "lucide-react";
+import { PackageSearch, Search, SlidersHorizontal, X } from "lucide-react";
 import { ProductCard } from "@/components/storefront/product-card";
 import { FocusCards } from "@/components/aceternity/spotlight-hero";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { EmptyState, ErrorState } from "@/components/ui/data-states";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import { catalogApi } from "@/lib/api";
 import type {
   CatalogFilters,
@@ -23,9 +50,28 @@ type ShopCatalogueProps = {
   emptyMessage?: string;
 };
 
-function paramsFromSearch(
-  searchParams: URLSearchParams,
-): ProductListParams {
+const PAGE_SIZE = 24;
+
+/** Filter keys only — `page` and `pageSize` are navigation, not filtering. */
+const FILTER_KEYS = [
+  "q",
+  "categoryId",
+  "brandId",
+  "departmentId",
+  "collectionId",
+  "attributeOptionId",
+  "sizeValueId",
+  "colorId",
+  "inStock",
+  "minPricePence",
+  "maxPricePence",
+] as const satisfies readonly (keyof ProductListParams)[];
+
+const CLEARED = Object.fromEntries(
+  FILTER_KEYS.map((key) => [key, undefined]),
+) as Partial<ProductListParams>;
+
+function paramsFromSearch(searchParams: URLSearchParams): ProductListParams {
   const bool = (key: string) => {
     const value = searchParams.get(key);
     if (value === "true") return true;
@@ -41,7 +87,7 @@ function paramsFromSearch(
 
   return {
     page: num("page") ?? 1,
-    pageSize: num("pageSize") ?? 24,
+    pageSize: num("pageSize") ?? PAGE_SIZE,
     q: searchParams.get("q") || undefined,
     categoryId: searchParams.get("categoryId") || undefined,
     brandId: searchParams.get("brandId") || undefined,
@@ -61,7 +107,7 @@ function toSearchParams(params: ProductListParams): URLSearchParams {
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === "") continue;
     if (key === "page" && value === 1) continue;
-    if (key === "pageSize" && value === 24) continue;
+    if (key === "pageSize" && value === PAGE_SIZE) continue;
     next.set(key, String(value));
   }
   return next;
@@ -70,22 +116,27 @@ function toSearchParams(params: ProductListParams): URLSearchParams {
 export function ShopCatalogue({
   initialProducts,
   filters,
-  emptyMessage = "No products found.",
+  emptyMessage = "No products match these filters.",
 }: ShopCatalogueProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState(initialProducts);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [draftQ, setDraftQ] = useState(searchParams.get("q") ?? "");
   const [fetching, setFetching] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const queryKey = searchParams.toString();
   const active = useMemo(
     () => paramsFromSearch(new URLSearchParams(queryKey)),
     [queryKey],
   );
+
+  // The server already rendered this exact query, so skip the duplicate fetch
+  // on first paint and only go to the network when the filters actually change.
+  const servedKey = useRef<string | null>(queryKey);
 
   const categories = useMemo(
     () => filters.categories ?? [],
@@ -111,21 +162,43 @@ export function ShopCatalogue({
     setDraftQ(active.q ?? "");
   }, [active.q]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const params = paramsFromSearch(new URLSearchParams(queryKey));
-    (async () => {
+  const load = useCallback(
+    async (key: string) => {
+      setError(null);
+      setFetching(true);
       try {
-        setError(null);
-        setFetching(true);
-        const data = await catalogApi.listProducts(params);
-        if (!cancelled) setResult(data);
+        const data = await catalogApi.listProducts(
+          paramsFromSearch(new URLSearchParams(key)),
+        );
+        setResult(data);
+        return true;
       } catch (err) {
+        setError(err);
+        return false;
+      } finally {
+        setFetching(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (servedKey.current === queryKey) return;
+    let cancelled = false;
+    (async () => {
+      const key = queryKey;
+      setError(null);
+      setFetching(true);
+      try {
+        const data = await catalogApi.listProducts(
+          paramsFromSearch(new URLSearchParams(key)),
+        );
         if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load products",
-          );
+          setResult(data);
+          servedKey.current = key;
         }
+      } catch (err) {
+        if (!cancelled) setError(err);
       } finally {
         if (!cancelled) setFetching(false);
       }
@@ -137,7 +210,16 @@ export function ShopCatalogue({
 
   useEffect(() => {
     setResult(initialProducts);
+    servedKey.current = queryKey;
+    // Only when the server sends a new page, not on every query change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialProducts]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.hash !== "#shop-search") return;
+    document.getElementById("shop-search")?.focus();
+  }, []);
 
   const toggleValue = (
     key: keyof ProductListParams,
@@ -149,317 +231,552 @@ export function ShopCatalogue({
     } as Partial<ProductListParams>);
   };
 
+  /** Applied filters as removable chips, so nothing is hidden in a panel. */
+  const appliedChips = useMemo(() => {
+    const chips: { key: string; label: string; clear: Partial<ProductListParams> }[] =
+      [];
+    if (active.q)
+      chips.push({
+        key: "q",
+        label: `“${active.q}”`,
+        clear: { q: undefined },
+      });
+    const department = (filters.departments ?? []).find(
+      (d) => d.id === active.departmentId,
+    );
+    if (department)
+      chips.push({
+        key: "departmentId",
+        label: department.name,
+        clear: { departmentId: undefined },
+      });
+    const category = categories.find((c) => c.id === active.categoryId);
+    if (category)
+      chips.push({
+        key: "categoryId",
+        label: category.name,
+        clear: { categoryId: undefined },
+      });
+    const size = (filters.sizes ?? []).find((s) => s.id === active.sizeValueId);
+    if (size)
+      chips.push({
+        key: "sizeValueId",
+        label: `Size ${size.label}`,
+        clear: { sizeValueId: undefined },
+      });
+    const color = (filters.colors ?? []).find((c) => c.id === active.colorId);
+    if (color)
+      chips.push({
+        key: "colorId",
+        label: color.name,
+        clear: { colorId: undefined },
+      });
+    if (active.inStock)
+      chips.push({
+        key: "inStock",
+        label: "In stock only",
+        clear: { inStock: undefined },
+      });
+    if (active.minPricePence != null)
+      chips.push({
+        key: "minPricePence",
+        label: `From ${formatGbp(active.minPricePence)}`,
+        clear: { minPricePence: undefined },
+      });
+    if (active.maxPricePence != null)
+      chips.push({
+        key: "maxPricePence",
+        label: `Up to ${formatGbp(active.maxPricePence)}`,
+        clear: { maxPricePence: undefined },
+      });
+    return chips;
+  }, [active, categories, filters]);
+
+  const busy = fetching || pending;
+
+  const filterControls = (
+    <FilterControls
+      active={active}
+      filters={filters}
+      categories={categories}
+      onChange={syncFilters}
+      onToggle={toggleValue}
+    />
+  );
+
   return (
     <div className="space-y-8">
+      {/* Heading */}
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          <Link href="/" className="hover:text-foreground">
-            Home
-          </Link>
-          {" / "}
-          <span className="text-foreground">Products</span>
-        </p>
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink render={<Link href="/" />}>Home</BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>Shop</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
         <div className="flex flex-wrap items-end justify-between gap-4">
           <h1 className="heading-display text-[clamp(2rem,9vw,3.75rem)] leading-[1.05] sm:text-5xl md:text-6xl">
-            Products
+            Shop
           </h1>
-          <p className="text-sm text-muted-foreground">
-            {fetching || pending ? (
+          <p
+            className="text-sm text-muted-foreground"
+            role="status"
+            aria-live="polite"
+          >
+            {busy ? (
               <span className="inline-flex items-center gap-2">
-                <span className="size-1.5 animate-pulse rounded-full bg-foreground" />
+                <span className="size-1.5 animate-pulse rounded-full bg-primary" />
                 Updating…
               </span>
             ) : (
               <>
-                {result.total} item{result.total === 1 ? "" : "s"}
+                <span className="text-numeric">{result.total}</span> item
+                {result.total === 1 ? "" : "s"} · newest first
               </>
             )}
           </p>
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
-        <form
-          className="relative flex-1"
-          onSubmit={(e) => {
-            e.preventDefault();
-            syncFilters({ q: draftQ.trim() || undefined });
-          }}
+      {/* Search + department shortcuts + mobile filter trigger */}
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <form
+            className="relative flex-1"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              syncFilters({ q: draftQ.trim() || undefined });
+            }}
+          >
+            <Label htmlFor="shop-search" className="sr-only">
+              Search products
+            </Label>
+            <Search
+              className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              id="shop-search"
+              type="search"
+              value={draftQ}
+              onChange={(event) => setDraftQ(event.target.value)}
+              placeholder="Search products"
+              className="h-11 rounded-full border-0 bg-secondary pr-24 pl-10 ring-1 ring-transparent focus-visible:ring-foreground/20"
+            />
+            <Button
+              type="submit"
+              variant="ghost"
+              size="sm"
+              className="absolute top-1/2 right-1.5 h-8 -translate-y-1/2 rounded-full px-3"
+            >
+              Search
+            </Button>
+          </form>
+
+          {/* Filters live in a drawer on phones: the sidebar pushed the grid
+              a full screen down. */}
+          <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+            <SheetTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="lg"
+                  className="h-11 shrink-0 rounded-full lg:hidden"
+                />
+              }
+            >
+              <SlidersHorizontal aria-hidden />
+              Filters
+              {appliedChips.length > 0 ? (
+                <span className="text-numeric ml-0.5 rounded-full bg-primary px-1.5 text-[0.7rem] text-primary-foreground">
+                  {appliedChips.length}
+                </span>
+              ) : null}
+            </SheetTrigger>
+            <SheetContent
+              side="bottom"
+              className="max-h-[85svh] overflow-y-auto rounded-t-xl"
+            >
+              <SheetHeader>
+                <SheetTitle>Filters</SheetTitle>
+              </SheetHeader>
+              <div className="px-4 pb-4">{filterControls}</div>
+              <div className="sticky bottom-0 flex gap-2 border-t border-border bg-popover p-4">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => syncFilters({ ...CLEARED, page: 1 })}
+                  disabled={appliedChips.length === 0}
+                >
+                  Clear all
+                </Button>
+                <Button className="flex-1" onClick={() => setFiltersOpen(false)}>
+                  Show {result.total} item{result.total === 1 ? "" : "s"}
+                </Button>
+              </div>
+            </SheetContent>
+          </Sheet>
+        </div>
+
+        <div
+          className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+          role="group"
+          aria-label="Shop by department"
         >
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={draftQ}
-            onChange={(e) => setDraftQ(e.target.value)}
-            placeholder="Search"
-            className="h-11 w-full rounded-full border-0 bg-secondary pl-10 pr-4 text-sm outline-none ring-1 ring-transparent transition focus:ring-foreground/20"
-          />
-        </form>
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          <button
-            type="button"
+          <DepartmentChip
+            selected={!active.categoryId && !active.departmentId}
             onClick={() =>
-              syncFilters({
-                categoryId: undefined,
-                departmentId: undefined,
-              })
+              syncFilters({ categoryId: undefined, departmentId: undefined })
             }
-            className={cn(
-              "shrink-0 rounded-full px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] transition",
-              !active.categoryId && !active.departmentId
-                ? "bg-foreground text-background"
-                : "bg-secondary text-foreground hover:bg-secondary/80",
-            )}
           >
             All
-          </button>
+          </DepartmentChip>
           {(filters.departments ?? []).map((item) => (
-            <button
+            <DepartmentChip
               key={item.id}
-              type="button"
+              selected={active.departmentId === item.id}
               onClick={() => toggleValue("departmentId", item.id)}
-              className={cn(
-                "shrink-0 rounded-full px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] transition",
-                active.departmentId === item.id
-                  ? "bg-foreground text-background"
-                  : "bg-secondary text-foreground hover:bg-secondary/80",
-              )}
             >
               {item.name}
-            </button>
+            </DepartmentChip>
           ))}
         </div>
+
+        {appliedChips.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="label-eyebrow text-muted-foreground">Applied</span>
+            {appliedChips.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={() => syncFilters(chip.clear)}
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-background px-2.5 text-xs font-medium transition-colors hover:bg-secondary focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+              >
+                {chip.label}
+                <X className="size-3" aria-hidden />
+                <span className="sr-only">Remove this filter</span>
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => syncFilters({ ...CLEARED, page: 1 })}
+              className="text-xs font-medium underline underline-offset-4"
+            >
+              Clear all
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="grid gap-10 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside className="space-y-8">
-          {(filters.sizes ?? []).length ? (
-            <div>
-              <p className="mb-3 text-sm font-medium">Size</p>
-              <div className="grid grid-cols-3 gap-2">
-                {(filters.sizes ?? []).map((size) => (
-                  <button
-                    key={size.id}
-                    type="button"
-                    onClick={() => toggleValue("sizeValueId", size.id)}
-                    className={cn(
-                      "flex h-10 items-center justify-center border text-xs font-medium transition",
-                      active.sizeValueId === size.id
-                        ? "border-foreground bg-foreground text-background"
-                        : "border-border hover:border-foreground/50",
-                    )}
-                  >
-                    {size.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="space-y-3 border-t border-border pt-6">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="size-3.5 accent-foreground"
-                checked={active.inStock === true}
-                onChange={(e) =>
-                  syncFilters({
-                    inStock: e.target.checked ? true : undefined,
-                  })
-                }
-              />
-              In stock only
-            </label>
-            <p className="text-xs text-muted-foreground">
-              Showing {result.items.length} of {result.total} from the API
-            </p>
-          </div>
-
-          <FilterSection title="Category">
-            <div className="space-y-2">
-              {categories.map((category) => (
-                <button
-                  key={category.id}
-                  type="button"
-                  onClick={() => toggleValue("categoryId", category.id)}
-                  className={cn(
-                    "block w-full text-left text-sm transition",
-                    active.categoryId === category.id
-                      ? "font-medium text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {category.name}
-                </button>
-              ))}
-              {!categories.length ? (
-                <p className="text-xs text-muted-foreground">
-                  Add categories in Admin → Categories.
-                </p>
-              ) : null}
-            </div>
-          </FilterSection>
-
-          {(filters.colors ?? []).length ? (
-            <FilterSection title="Colours">
-              <div className="flex flex-wrap gap-2">
-                {(filters.colors ?? []).map((color) => (
-                  <button
-                    key={color.id}
-                    type="button"
-                    title={color.name}
-                    aria-label={color.name}
-                    onClick={() => toggleValue("colorId", color.id)}
-                    className={cn(
-                      "size-8 border transition",
-                      active.colorId === color.id
-                        ? "border-foreground ring-2 ring-foreground/30"
-                        : "border-border",
-                    )}
-                    style={{ backgroundColor: color.hex ?? "#d4d4d4" }}
-                  />
-                ))}
-              </div>
-            </FilterSection>
-          ) : null}
-
-          <FilterSection title="Price range">
-            <div className="space-y-3 text-sm">
-              <p className="text-xs text-muted-foreground">
-                Catalogue range:{" "}
-                {filters.priceRange.minPence != null
-                  ? formatGbp(filters.priceRange.minPence)
-                  : "—"}{" "}
-                –{" "}
-                {filters.priceRange.maxPence != null
-                  ? formatGbp(filters.priceRange.maxPence)
-                  : "—"}
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="number"
-                  min={0}
-                  step={100}
-                  placeholder="Min £"
-                  className="h-10 border border-border bg-background px-3 text-sm outline-none focus:border-foreground"
-                  defaultValue={
-                    active.minPricePence != null
-                      ? active.minPricePence / 100
-                      : ""
-                  }
-                  onBlur={(e) => {
-                    const pounds = e.target.value
-                      ? Math.round(Number(e.target.value) * 100)
-                      : undefined;
-                    syncFilters({
-                      minPricePence:
-                        pounds !== undefined && Number.isFinite(pounds)
-                          ? pounds
-                          : undefined,
-                    });
-                  }}
-                />
-                <input
-                  type="number"
-                  min={0}
-                  step={100}
-                  placeholder="Max £"
-                  className="h-10 border border-border bg-background px-3 text-sm outline-none focus:border-foreground"
-                  defaultValue={
-                    active.maxPricePence != null
-                      ? active.maxPricePence / 100
-                      : ""
-                  }
-                  onBlur={(e) => {
-                    const pounds = e.target.value
-                      ? Math.round(Number(e.target.value) * 100)
-                      : undefined;
-                    syncFilters({
-                      maxPricePence:
-                        pounds !== undefined && Number.isFinite(pounds)
-                          ? pounds
-                          : undefined,
-                    });
-                  }}
-                />
-              </div>
-            </div>
-          </FilterSection>
-
-          {(active.q ||
-            active.categoryId ||
-            active.departmentId ||
-            active.sizeValueId ||
-            active.colorId ||
-            active.inStock ||
-            active.minPricePence != null ||
-            active.maxPricePence != null) && (
-            <button
-              type="button"
-              onClick={() =>
-                syncFilters({
-                  q: undefined,
-                  categoryId: undefined,
-                  brandId: undefined,
-                  departmentId: undefined,
-                  collectionId: undefined,
-                  sizeValueId: undefined,
-                  colorId: undefined,
-                  attributeOptionId: undefined,
-                  inStock: undefined,
-                  minPricePence: undefined,
-                  maxPricePence: undefined,
-                  page: 1,
-                })
-              }
-              className="text-sm font-medium underline-offset-4 hover:underline"
-            >
-              Clear all filters
-            </button>
-          )}
+        <aside className="hidden lg:block" aria-label="Product filters">
+          {filterControls}
         </aside>
 
-        <div className={cn(fetching || pending ? "opacity-70 transition-opacity" : "")}>
+        <div>
           {error ? (
-            <p className="py-16 text-center text-sm text-destructive">{error}</p>
-          ) : fetching && !result.items.length ? (
+            <div className="rounded-lg border border-border bg-card">
+              <ErrorState
+                error={error}
+                onRetry={() => void load(queryKey)}
+                description="We couldn't load products just now."
+              />
+            </div>
+          ) : busy && !result.items.length ? (
             <ProductGridShimmer />
           ) : !result.items.length ? (
-            <p className="py-16 text-center text-sm text-muted-foreground">
-              {emptyMessage}
-            </p>
+            <div className="rounded-lg border border-dashed border-border bg-card">
+              <EmptyState
+                icon={PackageSearch}
+                title={
+                  appliedChips.length > 0
+                    ? "Nothing matches those filters"
+                    : "No products yet"
+                }
+                description={
+                  appliedChips.length > 0
+                    ? "Try removing a filter, or widening the price range."
+                    : emptyMessage
+                }
+                action={
+                  appliedChips.length > 0 ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => syncFilters({ ...CLEARED, page: 1 })}
+                    >
+                      Clear all filters
+                    </Button>
+                  ) : (
+                    <Link
+                      href="/"
+                      className={cn(
+                        buttonVariants({ variant: "outline", size: "sm" }),
+                      )}
+                    >
+                      Back to home
+                    </Link>
+                  )
+                }
+              />
+            </div>
           ) : (
-            <FocusCards>
-              {result.items.map((product) => (
-                <ProductCard key={product.id} product={product} />
-              ))}
-            </FocusCards>
+            <div
+              aria-busy={busy || undefined}
+              className={cn(busy && "opacity-70 transition-opacity")}
+            >
+              <FocusCards>
+                {result.items.map((product) => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 320px"
+                  />
+                ))}
+              </FocusCards>
+            </div>
           )}
 
-          {result.totalPages > 1 ? (
-            <div className="mt-10 flex items-center justify-center gap-3">
-              <button
-                type="button"
-                disabled={result.page <= 1 || pending}
+          {result.totalPages > 1 && !error ? (
+            <nav
+              className="mt-10 flex items-center justify-center gap-4"
+              aria-label="Product pages"
+            >
+              <Button
+                variant="outline"
+                disabled={result.page <= 1 || busy}
                 onClick={() => syncFilters({ page: result.page - 1 })}
-                className="border border-border px-4 py-2 text-sm disabled:opacity-40"
               >
                 Previous
-              </button>
-              <span className="text-sm text-muted-foreground">
+              </Button>
+              <span className="text-numeric text-sm text-muted-foreground">
                 Page {result.page} of {result.totalPages}
               </span>
-              <button
-                type="button"
-                disabled={result.page >= result.totalPages || pending}
+              <Button
+                variant="outline"
+                disabled={result.page >= result.totalPages || busy}
                 onClick={() => syncFilters({ page: result.page + 1 })}
-                className="border border-border px-4 py-2 text-sm disabled:opacity-40"
               >
                 Next
-              </button>
-            </div>
+              </Button>
+            </nav>
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function DepartmentChip({
+  selected,
+  onClick,
+  children,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={cn(
+        "label-eyebrow shrink-0 rounded-full px-4 py-2.5 transition focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+        selected
+          ? "bg-primary text-primary-foreground shadow-e1"
+          : "bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function FilterControls({
+  active,
+  filters,
+  categories,
+  onChange,
+  onToggle,
+}: {
+  active: ProductListParams;
+  filters: CatalogFilters;
+  categories: CatalogFilters["categories"];
+  onChange: (patch: Partial<ProductListParams>) => void;
+  onToggle: (
+    key: keyof ProductListParams,
+    value: string | boolean | undefined,
+  ) => void;
+}) {
+  return (
+    <div className="space-y-6 pt-4 lg:pt-0">
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id="filter-in-stock"
+          checked={active.inStock === true}
+          onCheckedChange={(checked) =>
+            onChange({ inStock: checked ? true : undefined })
+          }
+        />
+        <Label htmlFor="filter-in-stock" className="text-sm font-normal">
+          In stock only
+        </Label>
+      </div>
+
+      {(filters.sizes ?? []).length ? (
+        <FilterSection title="Size">
+          <div className="grid grid-cols-4 gap-2 lg:grid-cols-3">
+            {(filters.sizes ?? []).map((size) => (
+              <button
+                key={size.id}
+                type="button"
+                aria-pressed={active.sizeValueId === size.id}
+                onClick={() => onToggle("sizeValueId", size.id)}
+                className={cn(
+                  "flex h-10 items-center justify-center rounded-md border text-xs font-medium transition focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  active.sizeValueId === size.id
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border hover:border-primary/40 hover:bg-accent/50",
+                )}
+              >
+                {size.label}
+              </button>
+            ))}
+          </div>
+        </FilterSection>
+      ) : null}
+
+      <FilterSection title="Category">
+        <div className="space-y-1">
+          {categories.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              aria-pressed={active.categoryId === category.id}
+              onClick={() => onToggle("categoryId", category.id)}
+              className={cn(
+                "block w-full rounded-sm px-1 py-1.5 text-left text-sm transition focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                active.categoryId === category.id
+                  ? "font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {category.name}
+            </button>
+          ))}
+          {!categories.length ? (
+            <p className="text-xs text-muted-foreground">
+              No categories yet.
+            </p>
+          ) : null}
+        </div>
+      </FilterSection>
+
+      {(filters.colors ?? []).length ? (
+        <FilterSection title="Colour">
+          <div className="flex flex-wrap gap-2">
+            {(filters.colors ?? []).map((color) => (
+              <button
+                key={color.id}
+                type="button"
+                title={color.name}
+                aria-label={color.name}
+                aria-pressed={active.colorId === color.id}
+                onClick={() => onToggle("colorId", color.id)}
+                className={cn(
+                  "size-9 rounded-md border transition focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  active.colorId === color.id
+                    ? "border-foreground ring-2 ring-foreground/30"
+                    : "border-border",
+                )}
+                style={{ backgroundColor: color.hex ?? "#d4d4d4" }}
+              />
+            ))}
+          </div>
+        </FilterSection>
+      ) : null}
+
+      <FilterSection title="Price">
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Catalogue range{" "}
+            <span className="text-numeric">
+              {filters.priceRange.minPence != null
+                ? formatGbp(filters.priceRange.minPence)
+                : "—"}
+            </span>{" "}
+            –{" "}
+            <span className="text-numeric">
+              {filters.priceRange.maxPence != null
+                ? formatGbp(filters.priceRange.maxPence)
+                : "—"}
+            </span>
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-min-price" className="text-xs">
+                Min £
+              </Label>
+              <Input
+                id="filter-min-price"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step={5}
+                className="text-numeric"
+                defaultValue={
+                  active.minPricePence != null ? active.minPricePence / 100 : ""
+                }
+                onBlur={(event) => {
+                  const pence = event.target.value
+                    ? Math.round(Number(event.target.value) * 100)
+                    : undefined;
+                  onChange({
+                    minPricePence:
+                      pence !== undefined && Number.isFinite(pence)
+                        ? pence
+                        : undefined,
+                  });
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-max-price" className="text-xs">
+                Max £
+              </Label>
+              <Input
+                id="filter-max-price"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step={5}
+                className="text-numeric"
+                defaultValue={
+                  active.maxPricePence != null ? active.maxPricePence / 100 : ""
+                }
+                onBlur={(event) => {
+                  const pence = event.target.value
+                    ? Math.round(Number(event.target.value) * 100)
+                    : undefined;
+                  onChange({
+                    maxPricePence:
+                      pence !== undefined && Number.isFinite(pence)
+                        ? pence
+                        : undefined,
+                  });
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </FilterSection>
     </div>
   );
 }
@@ -472,11 +789,9 @@ function FilterSection({
   children: React.ReactNode;
 }) {
   return (
-    <details open className="border-t border-border pt-4">
-      <summary className="cursor-pointer list-none text-sm font-medium">
-        {title}
-      </summary>
-      <div className="mt-3">{children}</div>
-    </details>
+    <section className="border-t border-border pt-5">
+      <h3 className="label-meta mb-3 text-muted-foreground">{title}</h3>
+      {children}
+    </section>
   );
 }

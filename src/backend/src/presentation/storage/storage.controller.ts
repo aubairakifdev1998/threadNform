@@ -30,7 +30,10 @@ import {
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import type { User } from '../../domain/entities/user.entity.js';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard.js';
-import { assertSafeStoragePath } from '../commerce/order-access.js';
+import {
+  assertSafeStorageFolder,
+  assertSafeStoragePath,
+} from '../commerce/order-access.js';
 import { DeleteFilesDto } from './dto/delete-files.dto.js';
 import { RateLimit } from '../common/rate-limit/rate-limit.decorator.js';
 import { GetFileUrlDto } from './dto/get-file-url.dto.js';
@@ -191,7 +194,7 @@ export class StorageController {
 
     return this.uploadFile.execute({
       bucket: resolvedBucket,
-      folder,
+      folder: assertSafeStorageFolder(folder),
       fileName: file.originalname,
       body: file.buffer,
       contentType: file.mimetype,

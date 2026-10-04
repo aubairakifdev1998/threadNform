@@ -227,6 +227,30 @@ export interface CommerceRepository {
     paymentStatus?: string;
     q?: string;
   }): Promise<{ items: Order[]; total: number }>;
+  /**
+   * Per-shopper diary: email/phone, order history, spend, and most-bought
+   * product — keyed by order email so guests and registered accounts unify.
+   */
+  listCustomerDiary(params: {
+    page: number;
+    pageSize: number;
+    q?: string;
+    sort?: 'spend' | 'orders' | 'recent';
+  }): Promise<{
+    items: Array<{
+      customerId: string | null;
+      email: string;
+      phone: string | null;
+      fullName: string | null;
+      status: string | null;
+      orderCount: number;
+      totalSpendPence: number;
+      lastOrderAt: Date;
+      topProductName: string | null;
+      topProductQuantity: number;
+    }>;
+    total: number;
+  }>;
   listOrderItems(orderId: string): Promise<OrderItem[]>;
   /** Status history, oldest first; `customerOnly` hides internal/admin notes. */
   listOrderTimeline(
@@ -295,6 +319,22 @@ export interface CommerceRepository {
     before?: unknown;
     after?: unknown;
   }): Promise<void>;
+  listAuditLogs(params: {
+    page: number;
+    pageSize: number;
+    q?: string;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      actorType: string;
+      actorId: string | null;
+      action: string;
+      entityType: string;
+      entityId: string | null;
+      createdAt: Date;
+    }>;
+    total: number;
+  }>;
   createReturnRequest(input: {
     orderId: string;
     reason?: string | null;

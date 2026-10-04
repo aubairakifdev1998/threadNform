@@ -20,7 +20,7 @@ export function OrderProgress({ steps }: { steps: Step[] }) {
               aria-hidden
               className={cn(
                 "absolute top-3.5 right-1/2 hidden h-px w-full sm:block",
-                step.state === "upcoming" ? "bg-border" : "bg-foreground",
+                step.state === "upcoming" ? "bg-border" : "bg-primary",
               )}
             />
           ) : null}
@@ -28,9 +28,9 @@ export function OrderProgress({ steps }: { steps: Step[] }) {
             className={cn(
               "relative z-10 flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold",
               step.state === "done" &&
-                "border-foreground bg-foreground text-background",
+                "border-primary bg-primary text-primary-foreground",
               step.state === "current" &&
-                "border-foreground bg-background text-foreground ring-4 ring-foreground/10",
+                "border-primary bg-background text-primary ring-4 ring-primary/15",
               step.state === "upcoming" &&
                 "border-border bg-background text-muted-foreground",
             )}

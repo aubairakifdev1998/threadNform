@@ -1,4 +1,9 @@
+import Link from "next/link";
+import { PackageSearch } from "lucide-react";
 import { ProductCard } from "@/components/storefront/product-card";
+import { EmptyState } from "@/components/ui/data-states";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { ProductSummary } from "@/types/api";
 
 export function ProductGrid({
@@ -10,9 +15,20 @@ export function ProductGrid({
 }) {
   if (!products.length) {
     return (
-      <p className="px-2 py-10 text-center text-sm leading-relaxed text-muted-foreground sm:py-16">
-        {emptyMessage}
-      </p>
+      <EmptyState
+        icon={PackageSearch}
+        title="Nothing to show yet"
+        description={emptyMessage}
+        action={
+          <Link
+            href="/shop"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+          >
+            Browse the shop
+          </Link>
+        }
+        className="py-10 sm:py-16"
+      />
     );
   }
 

@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -17,8 +16,9 @@ import {
 import { adminApi } from "@/lib/api";
 import { ApiError } from "@/lib/api/client";
 import { tokenStore } from "@/lib/auth/session";
-import { formatGbp } from "@/lib/money";
 import { cn } from "@/lib/utils";
+import { PriceDisplay } from "@/components/ui/price";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Spinner } from "@/components/ui/page-shimmers";
 import { AdminOrderFulfilment } from "@/components/admin/admin-order-fulfilment";
 import { OrderTimeline } from "@/components/orders/order-timeline";
@@ -233,22 +233,24 @@ export function AdminOrderReviewSheet({
                     {order.subtotalPence != null ? (
                       <div className="flex justify-between">
                         <dt className="text-muted-foreground">Items</dt>
-                        <dd className="tabular-nums">
-                          {formatGbp(order.subtotalPence)}
+                        <dd>
+                          <PriceDisplay pence={order.subtotalPence} size="sm" />
                         </dd>
                       </div>
                     ) : null}
                     {order.shippingPence != null ? (
                       <div className="flex justify-between">
                         <dt className="text-muted-foreground">Delivery</dt>
-                        <dd className="tabular-nums">
-                          {formatGbp(order.shippingPence)}
+                        <dd>
+                          <PriceDisplay pence={order.shippingPence} size="sm" />
                         </dd>
                       </div>
                     ) : null}
                     <div className="flex justify-between font-semibold">
                       <dt>Total due</dt>
-                      <dd className="tabular-nums">{formatGbp(amountDue)}</dd>
+                      <dd>
+                        <PriceDisplay pence={amountDue} size="sm" />
+                      </dd>
                     </div>
                     {payment?.amountClaimedPence != null ? (
                       <div
@@ -259,23 +261,28 @@ export function AdminOrderReviewSheet({
                         )}
                       >
                         <dt>Customer says paid</dt>
-                        <dd className="tabular-nums">
-                          {formatGbp(payment.amountClaimedPence)}
+                        <dd>
+                          <PriceDisplay
+                            pence={payment.amountClaimedPence}
+                            size="sm"
+                          />
                         </dd>
                       </div>
                     ) : null}
                     {order.refundedPence ? (
                       <div className="flex justify-between text-success">
                         <dt>Refunded</dt>
-                        <dd className="tabular-nums">
-                          −{formatGbp(order.refundedPence)}
+                        <dd className="inline-flex items-baseline gap-0.5">
+                          −
+                          <PriceDisplay pence={order.refundedPence} size="sm" />
                         </dd>
                       </div>
                     ) : null}
                   </dl>
                   {order.vatPence != null ? (
                     <p className="mt-2 text-xs text-muted-foreground">
-                      Incl. VAT {formatGbp(order.vatPence)}
+                      Incl. VAT{" "}
+                      <PriceDisplay pence={order.vatPence} size="sm" />
                     </p>
                   ) : null}
                   {payment?.amountClaimedPence != null &&
@@ -327,9 +334,7 @@ export function AdminOrderReviewSheet({
                         <span className="text-muted-foreground">
                           {item.productName} · {item.sku} × {item.quantity}
                         </span>
-                        <span className="tabular-nums">
-                          {formatGbp(item.lineGrossPence)}
-                        </span>
+                        <PriceDisplay pence={item.lineGrossPence} size="sm" />
                       </li>
                     ))}
                   </ul>
@@ -340,11 +345,11 @@ export function AdminOrderReviewSheet({
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="text-sm font-medium">Payment evidence</h3>
                   {paymentVerified ? (
-                    <Badge>Verified</Badge>
+                    <StatusBadge tone="success">Verified</StatusBadge>
                   ) : waitingForProof ? (
-                    <Badge variant="outline">Waiting for proof</Badge>
+                    <StatusBadge tone="neutral">Waiting for proof</StatusBadge>
                   ) : canReviewPayment ? (
-                    <Badge variant="secondary">Needs review</Badge>
+                    <StatusBadge tone="warning">Needs review</StatusBadge>
                   ) : null}
                 </div>
 

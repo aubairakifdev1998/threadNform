@@ -59,6 +59,25 @@ const PG_CLIENT_ERRORS: Record<
   },
 };
 
+/** Schema drift (missing table/column) — still a 500, but with a useful code. */
+const PG_SCHEMA_ERRORS: Record<
+  string,
+  { status: number; code: string; message: string }
+> = {
+  '42P01': {
+    status: HttpStatus.INTERNAL_SERVER_ERROR,
+    code: 'SCHEMA_MISMATCH',
+    message:
+      'The database is missing a table this endpoint needs. Apply pending migrations.',
+  },
+  '42703': {
+    status: HttpStatus.INTERNAL_SERVER_ERROR,
+    code: 'SCHEMA_MISMATCH',
+    message:
+      'The database is missing a column this endpoint needs. Apply pending migrations.',
+  },
+};
+
 @Catch()
 export class DomainExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger('ExceptionFilter');
@@ -105,7 +124,9 @@ export class DomainExceptionFilter implements ExceptionFilter {
     }
 
     const pg = findPgError(exception);
-    const mapped = pg ? PG_CLIENT_ERRORS[pg.code] : undefined;
+    const mapped = pg
+      ? (PG_CLIENT_ERRORS[pg.code] ?? PG_SCHEMA_ERRORS[pg.code])
+      : undefined;
     if (mapped) {
       this.logger.warn(
         `${request?.method} ${request?.url} → ${mapped.status} (pg ${pg!.code}${

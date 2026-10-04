@@ -455,6 +455,27 @@ describe('Partial shipments, partial refunds & email outbox', () => {
         .status,
     ).toBe(403);
     expect((await ship(o.orderId, {}, o.customer)).status).toBe(403);
+
+    // STAFF must not refund via status patch either.
+    await ship(o.orderId, {});
+    for (const status of ['DELIVERED', 'RETURN_REQUESTED', 'RETURNED']) {
+      expect(
+        (
+          await h
+            .http()
+            .patch(`${API}/admin/orders/${o.orderId}/status`)
+            .set(bearer(owner))
+            .send({ status })
+        ).status,
+      ).toBe(200);
+    }
+    const viaStatus = await h
+      .http()
+      .patch(`${API}/admin/orders/${o.orderId}/status`)
+      .set(bearer(staff))
+      .send({ status: 'REFUNDED' });
+    expect(viaStatus.status).toBe(403);
+    expect(await state(o.orderId)).toMatchObject({ status: 'RETURNED' });
   });
 
   it('OUT-01 email delivery failure is retried by the cron until sent', async () => {

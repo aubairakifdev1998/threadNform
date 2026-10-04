@@ -335,7 +335,9 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     code: string,
   ): Promise<void> {
     const [inUse] = await this.db
-      .select({ value: sql<number>`count(distinct ${productVariants.productId})::int` })
+      .select({
+        value: sql<number>`count(distinct ${productVariants.productId})::int`,
+      })
       .from(productVariantOptions)
       .innerJoin(
         productVariants,
@@ -443,7 +445,8 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     if (params.brandId) conditions.push(eq(products.brandId, params.brandId));
     if (params.departmentId)
       conditions.push(eq(products.departmentId, params.departmentId));
-    if (params.q) conditions.push(ilike(products.name, containsPattern(params.q)));
+    if (params.q)
+      conditions.push(ilike(products.name, containsPattern(params.q)));
 
     if (params.collectionId) {
       conditions.push(
@@ -463,9 +466,7 @@ export class SupabaseCatalogRepository implements CatalogRepository {
 
     if (params.attributeOptionId || params.sizeValueId || params.colorId) {
       // All option conditions apply to the same option row (existing behaviour).
-      const optConditions: SQL[] = [
-        eq(productVariants.productId, products.id),
-      ];
+      const optConditions: SQL[] = [eq(productVariants.productId, products.id)];
       if (params.attributeOptionId) {
         optConditions.push(
           eq(productVariantOptions.optionId, params.attributeOptionId),
@@ -518,9 +519,7 @@ export class SupabaseCatalogRepository implements CatalogRepository {
       params.minPricePence !== undefined ||
       params.maxPricePence !== undefined
     ) {
-      const priceConditions: SQL[] = [
-        eq(productPrices.productId, products.id),
-      ];
+      const priceConditions: SQL[] = [eq(productPrices.productId, products.id)];
       if (params.minPricePence !== undefined) {
         priceConditions.push(
           gte(productPrices.basePricePence, params.minPricePence),
@@ -719,8 +718,12 @@ export class SupabaseCatalogRepository implements CatalogRepository {
         .orderBy(asc(colors.name)),
       this.db
         .select({
-          minPence: sql<string | null>`min(coalesce(${productPrices.salePricePence}, ${productPrices.basePricePence}))`,
-          maxPence: sql<string | null>`max(coalesce(${productPrices.salePricePence}, ${productPrices.basePricePence}))`,
+          minPence: sql<
+            string | null
+          >`min(coalesce(${productPrices.salePricePence}, ${productPrices.basePricePence}))`,
+          maxPence: sql<
+            string | null
+          >`max(coalesce(${productPrices.salePricePence}, ${productPrices.basePricePence}))`,
         })
         .from(productPrices)
         // Draft/archived prices must not leak into the public price slider.
@@ -777,8 +780,10 @@ export class SupabaseCatalogRepository implements CatalogRepository {
       })),
       attributes: attributesWithOptions,
       priceRange: {
-        minPence: priceRange?.minPence == null ? null : Number(priceRange.minPence),
-        maxPence: priceRange?.maxPence == null ? null : Number(priceRange.maxPence),
+        minPence:
+          priceRange?.minPence == null ? null : Number(priceRange.minPence),
+        maxPence:
+          priceRange?.maxPence == null ? null : Number(priceRange.maxPence),
       },
     };
   }

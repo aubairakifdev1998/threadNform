@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ImageOff, Layers, Pencil, Plus } from "lucide-react";
+import { ImageOff, Layers, Pencil, Plus, Trash2 } from "lucide-react";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
 import { DataTable } from "@/components/admin/data-table";
 import { RowActions } from "@/components/admin/row-actions";
@@ -56,6 +56,43 @@ export function AdminDepartmentsPanel() {
   });
 
   const items = query.data ?? [];
+
+  const removeMutation = useMutation({
+    mutationFn: (id: string) =>
+      apiRequest(`/admin/departments/${id}`, {
+        method: "DELETE",
+        accessToken: requireAccessToken(),
+        cache: "no-store",
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: departmentsKey });
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "taxonomy", "categories"],
+      });
+    },
+  });
+
+  async function remove(item: Department) {
+    if (
+      !window.confirm(
+        `Delete “${item.name}”? Categories and live products in this department must be moved first.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await removeMutation.mutateAsync(item.id);
+      toast.success("Department deleted");
+      if (editing?.id === item.id) {
+        setFormOpen(false);
+        setEditing(null);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError ? error.message : "Delete failed",
+      );
+    }
+  }
 
   function openForm(item: Department | null) {
     setEditing(item);
@@ -124,11 +161,19 @@ export function AdminDepartmentsPanel() {
                 icon: <Pencil aria-hidden />,
                 onSelect: () => openForm(row.original),
               },
+              {
+                label: "Delete department",
+                icon: <Trash2 aria-hidden />,
+                destructive: true,
+                separated: true,
+                onSelect: () => void remove(row.original),
+              },
             ]}
           />
         ),
       },
     ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 

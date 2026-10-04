@@ -1,17 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { ScrollText, Truck, Warehouse } from "lucide-react";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
+import { AdminListPagination } from "@/components/admin/admin-list-pagination";
 import { DataTable } from "@/components/admin/data-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MetaChip, StatusBadge } from "@/components/ui/status-badge";
 import { PriceDisplay } from "@/components/ui/price";
 import { ErrorState } from "@/components/ui/data-states";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { adminApi, catalogApi } from "@/lib/api";
 import { tokenStore } from "@/lib/auth/session";
 import { useAdminDashboard, useWarehouses } from "@/lib/query/admin";
@@ -347,18 +350,41 @@ type AuditRow = {
   createdAt: string;
 };
 
+const AUDIT_PAGE_SIZE = 25;
+
 export function AdminAuditLogsPanel() {
-  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const q = useDebouncedValue(search.trim());
   const token = tokenStore.getAccessToken();
+
+  useEffect(() => {
+    setPage(1);
+  }, [q]);
+
   const query = useQuery({
-    queryKey: ["admin", "audit-logs", q],
+    queryKey: ["admin", "audit-logs", page, AUDIT_PAGE_SIZE, q],
     enabled: Boolean(token),
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       if (!token) throw new Error("Not signed in");
-      return adminApi.listAuditLogs(token, { page: 1, pageSize: 50, q: q || undefined });
+      const result = await adminApi.listAuditLogs(token, {
+        page,
+        pageSize: AUDIT_PAGE_SIZE,
+        q: q || undefined,
+      });
+      const items = Array.isArray(result?.items) ? result.items : [];
+      const total =
+        typeof result?.total === "number" && Number.isFinite(result.total)
+          ? result.total
+          : items.length;
+      return { items, total };
     },
   });
+
   const rows = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));
 
   const columns = useMemo<ColumnDef<AuditRow, unknown>[]>(
     () => [
@@ -418,18 +444,40 @@ export function AdminAuditLogsPanel() {
         caption="Audit logs"
         columns={columns}
         data={rows}
-        isLoading={query.isLoading}
+        getRowId={(row) => row.id}
+        isLoading={query.isPending}
+        isRefreshing={query.isPlaceholderData}
         isError={query.isError}
         error={query.error}
         onRetry={() => void query.refetch()}
-        searchValue={q}
-        onSearchChange={setQ}
+        searchValue={search}
+        onSearchChange={setSearch}
         searchPlaceholder="Search action or entity…"
         empty={{
           icon: ScrollText,
-          title: "No audit events yet",
-          description: "Admin catalogue and order actions will appear here.",
+          title: q
+            ? `No audit events match “${q}”`
+            : "No audit events yet",
+          description: q
+            ? "Try another action, entity type, or id."
+            : "Admin catalogue and order actions will appear here.",
+          action: q ? (
+            <Button variant="outline" size="sm" onClick={() => setSearch("")}>
+              Clear search
+            </Button>
+          ) : undefined,
         }}
+        footer={
+          !query.isPending && !query.isError && total > 0 ? (
+            <AdminListPagination
+              page={Math.min(page, totalPages)}
+              totalPages={totalPages}
+              total={total}
+              pageSize={AUDIT_PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          ) : null
+        }
       />
     </div>
   );

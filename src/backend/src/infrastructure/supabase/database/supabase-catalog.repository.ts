@@ -125,6 +125,54 @@ export class SupabaseCatalogRepository implements CatalogRepository {
     return this.mapDepartment(row);
   }
 
+  /**
+   * Deletes a department nothing live depends on. Categories and non-archived
+   * products block the delete; archived products are unlinked.
+   */
+  async deleteDepartment(id: string): Promise<void> {
+    const categoryRows = await this.db
+      .select({ name: categories.name })
+      .from(categories)
+      .where(eq(categories.departmentId, id))
+      .orderBy(asc(categories.name));
+    if (categoryRows.length) {
+      const names = categoryRows.map((c) => c.name);
+      throw new ConflictException(
+        `This department has ${names.length === 1 ? 'a category' : `${names.length} categories`} (${names.join(', ')}). Move or delete ${names.length === 1 ? 'it' : 'them'} first.`,
+        'DEPARTMENT_HAS_CATEGORIES',
+        { categories: names },
+      );
+    }
+
+    const [inUse] = await this.db
+      .select({ value: count() })
+      .from(products)
+      .where(
+        and(eq(products.departmentId, id), ne(products.status, 'ARCHIVED')),
+      );
+    const productCount = Number(inUse?.value ?? 0);
+    if (productCount) {
+      throw new ConflictException(
+        `This department is used by ${productCount === 1 ? '1 product' : `${productCount} products`}. Move ${productCount === 1 ? 'it' : 'them'} to another department first.`,
+        'DEPARTMENT_IN_USE',
+        { productCount },
+      );
+    }
+
+    await this.db
+      .update(products)
+      .set({ departmentId: null })
+      .where(eq(products.departmentId, id));
+
+    const deleted = await this.db
+      .delete(departments)
+      .where(eq(departments.id, id))
+      .returning({ id: departments.id });
+    if (!deleted.length) {
+      throw new NotFoundException('Department', id);
+    }
+  }
+
   async listCategories(departmentId?: string): Promise<Category[]> {
     const rows = departmentId
       ? await this.db

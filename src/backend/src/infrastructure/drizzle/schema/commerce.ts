@@ -147,6 +147,8 @@ export const orders = pgTable('orders', {
   placedAt: timestamp('placed_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
+  /** Set when admin archives a period — hidden from portal lists, kept for audit. */
+  archivedAt: timestamp('archived_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

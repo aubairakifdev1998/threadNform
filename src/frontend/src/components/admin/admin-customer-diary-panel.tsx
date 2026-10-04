@@ -2,8 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { BookOpen, Crown, Mail, Phone, ShoppingBag } from "lucide-react";
+import { toast } from "sonner";
+import {
+  Archive,
+  BookOpen,
+  Crown,
+  Mail,
+  Phone,
+  ShoppingBag,
+} from "lucide-react";
 import { AdminPageHeader } from "@/components/admin/admin-page-header";
 import { AdminListPagination } from "@/components/admin/admin-list-pagination";
 import { DataTable } from "@/components/admin/data-table";
@@ -16,12 +25,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { PriceDisplay } from "@/components/ui/price";
 import { CustomerStatusBadge } from "@/components/status/status-badges";
 import { MetaChip } from "@/components/ui/status-badge";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { adminApi } from "@/lib/api";
+import { ApiError } from "@/lib/api/client";
 import { formatDate } from "@/lib/orders/presentation";
 import {
+  requireAccessToken,
   useAdminCustomerDiary,
   type CustomerDiaryRow,
 } from "@/lib/query/admin";
@@ -34,11 +48,24 @@ type SortKey = "spend" | "orders" | "recent";
  * Separate analysis surface from the customers CRUD list — ranked shoppers
  * with contact details, lifetime order volume, spend, and favourite product.
  */
+function todayIsoDate() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export function AdminCustomerDiaryPanel() {
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("spend");
   const query = useDebouncedValue(search.trim());
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState(todayIsoDate);
+  const [previewCount, setPreviewCount] = useState<number | null>(null);
+  const [archiving, setArchiving] = useState(false);
 
   useEffect(() => {
     setPage(1);
@@ -50,6 +77,67 @@ export function AdminCustomerDiaryPanel() {
     q: query || undefined,
     sort,
   });
+
+  async function previewArchive() {
+    if (!fromDate || !toDate) {
+      toast.error("Choose a start and end date");
+      return;
+    }
+    setArchiving(true);
+    setPreviewCount(null);
+    try {
+      const result = await adminApi.archiveCustomerPeriod(
+        requireAccessToken(),
+        { fromDate, toDate, dryRun: true },
+      );
+      setPreviewCount(result.orderCount);
+      toast.message(
+        result.orderCount === 0
+          ? "No orders in that period"
+          : `${result.orderCount} order${result.orderCount === 1 ? "" : "s"} would be archived`,
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError ? error.message : "Preview failed",
+      );
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  async function confirmArchive() {
+    if (!fromDate || !toDate) {
+      toast.error("Choose a start and end date");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Archive all customer order data from ${fromDate} to ${toDate}? Those orders will disappear from the admin portal, customer diary, and account order history. This cannot be undone from the UI.`,
+      )
+    ) {
+      return;
+    }
+    setArchiving(true);
+    try {
+      const result = await adminApi.archiveCustomerPeriod(
+        requireAccessToken(),
+        { fromDate, toDate, dryRun: false },
+      );
+      setPreviewCount(null);
+      toast.success(
+        result.orderCount === 0
+          ? "Nothing to archive in that period"
+          : `Archived ${result.orderCount} order${result.orderCount === 1 ? "" : "s"}`,
+      );
+      void queryClient.invalidateQueries({ queryKey: ["admin"] });
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError ? error.message : "Archive failed",
+      );
+    } finally {
+      setArchiving(false);
+    }
+  }
 
   const items = diary.data?.items ?? [];
   const total = diary.data?.total ?? 0;
@@ -181,6 +269,78 @@ export function AdminCustomerDiaryPanel() {
         title="Customer diary"
         description="Who buys, how often, and what they prefer — ranked so you can stay close to your best customers."
       />
+
+      <Card className="shadow-none">
+        <CardHeader className="pb-3">
+          <CardDescription className="flex items-center gap-2">
+            <Archive className="size-4" aria-hidden />
+            Archive a period
+          </CardDescription>
+          <CardTitle className="text-base">
+            Hide customer order data from the portal
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            Soft-archives every order placed in the selected dates (UK calendar).
+            Archived orders leave admin lists, the diary, payments queue, and
+            customer account history — records stay in the database for audit.
+          </p>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <div className="space-y-1.5">
+              <Label htmlFor="archive-from">From</Label>
+              <Input
+                id="archive-from"
+                type="date"
+                value={fromDate}
+                onChange={(event) => {
+                  setFromDate(event.target.value);
+                  setPreviewCount(null);
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="archive-to">To</Label>
+              <Input
+                id="archive-to"
+                type="date"
+                value={toDate}
+                onChange={(event) => {
+                  setToDate(event.target.value);
+                  setPreviewCount(null);
+                }}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={archiving || !fromDate || !toDate}
+                onClick={() => void previewArchive()}
+              >
+                Preview count
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={archiving || !fromDate || !toDate}
+                onClick={() => void confirmArchive()}
+              >
+                Archive period
+              </Button>
+            </div>
+          </div>
+          {previewCount != null ? (
+            <p className="text-sm text-muted-foreground">
+              Preview:{" "}
+              <span className="font-medium text-foreground">
+                {previewCount} order{previewCount === 1 ? "" : "s"}
+              </span>{" "}
+              in range.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
 
       {(topSpender || topBuyer) && (
         <div className="grid gap-4 md:grid-cols-2">

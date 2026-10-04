@@ -48,6 +48,7 @@ export type Order = {
   trackingUrl: string | null;
   refundedPence: number;
   placedAt: Date;
+  archivedAt: Date | null;
 };
 
 export type OrderItem = {
@@ -226,10 +227,13 @@ export interface CommerceRepository {
     status?: string;
     paymentStatus?: string;
     q?: string;
+    /** When true, include soft-archived orders (admin purge paths). */
+    includeArchived?: boolean;
   }): Promise<{ items: Order[]; total: number }>;
   /**
    * Per-shopper diary: email/phone, order history, spend, and most-bought
    * product — keyed by order email so guests and registered accounts unify.
+   * Soft-archived orders are excluded.
    */
   listCustomerDiary(params: {
     page: number;
@@ -251,6 +255,15 @@ export interface CommerceRepository {
     }>;
     total: number;
   }>;
+  /**
+   * Soft-archive every non-archived order whose placed_at falls in [from, toExclusive).
+   * Returns how many rows were archived (or would be, when dryRun).
+   */
+  archiveOrdersByPeriod(params: {
+    from: Date;
+    toExclusive: Date;
+    dryRun?: boolean;
+  }): Promise<{ orderCount: number; from: Date; toExclusive: Date }>;
   listOrderItems(orderId: string): Promise<OrderItem[]>;
   /** Status history, oldest first; `customerOnly` hides internal/admin notes. */
   listOrderTimeline(

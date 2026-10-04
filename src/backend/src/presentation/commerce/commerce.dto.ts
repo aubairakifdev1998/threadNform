@@ -118,8 +118,34 @@ export class CustomerDiaryQueryDto extends PaginationQueryDto {
   sort?: 'spend' | 'orders' | 'recent';
 }
 
+/** Archive all customer order data placed in an inclusive UK calendar range. */
+export class ArchiveCustomerPeriodDto {
+  /** Inclusive start date `YYYY-MM-DD` (Europe/London). */
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  fromDate!: string;
+
+  /** Inclusive end date `YYYY-MM-DD` (Europe/London). */
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  toDate!: string;
+
+  /** When true, only count matching orders — do not archive. */
+  @IsOptional()
+  @IsBoolean()
+  dryRun?: boolean;
+}
+
 /** Shared search on /admin/customers list. */
 export class CustomerListQueryDto extends PaginationQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  q?: string;
+}
+
+/** Query for /admin/audit-logs — whitelist search + pagination. */
+export class AuditLogsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   @MaxLength(200)

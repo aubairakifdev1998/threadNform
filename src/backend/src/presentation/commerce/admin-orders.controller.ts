@@ -81,6 +81,8 @@ import {
 } from '../../domain/exceptions/domain.exception.js';
 import {
   AdjustInventoryDto,
+  ArchiveCustomerPeriodDto,
+  AuditLogsQueryDto,
   CancelOrderDto,
   CreateRefundDto,
   CreateShipmentDto,
@@ -486,13 +488,11 @@ export class AdminOrdersController {
   @Get('admin/audit-logs')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.AUDIT_READ)
-  async adminAuditLogs(
-    @Query() query: PaginationQueryDto & { q?: string },
-  ) {
-    const page = normalizePagination(query.page, query.pageSize);
+  async adminAuditLogs(@Query() query: AuditLogsQueryDto) {
+    const page = normalizePagination(query.page, query.pageSize ?? 25);
     const result = await this.commerce.listAuditLogs({
       ...page,
-      q: query.q,
+      q: query.q?.trim() || undefined,
     });
     return paginated(result.items, result.total, page);
   }
@@ -554,6 +554,51 @@ export class AdminOrdersController {
       sort,
     });
     return paginated(result.items, result.total, page);
+  }
+
+  /**
+   * Soft-archive all orders placed in an inclusive UK date range so they no
+   * longer appear in admin/customer portal lists (diary, orders, payments).
+   * Registered before :id so "archive-period" is not captured as a UUID.
+   */
+  @Post('admin/customers/archive-period')
+  @UseGuards(AdminAuthGuard, PermissionsGuard)
+  @RequirePermissions(Permission.CUSTOMERS_BLOCK)
+  async adminArchiveCustomerPeriod(
+    @Body() body: ArchiveCustomerPeriodDto,
+    @Req() req: AdminAuthenticatedRequest,
+  ) {
+    const { from, toExclusive } = ukInclusiveDayRange(
+      body.fromDate,
+      body.toDate,
+    );
+    const dryRun = body.dryRun === true;
+    const result = await this.uow.run(() =>
+      this.commerce.archiveOrdersByPeriod({ from, toExclusive, dryRun }),
+    );
+
+    if (!dryRun) {
+      await this.commerce.writeAudit({
+        actorType: 'ADMIN',
+        actorId: req.adminUser?.id,
+        action: 'CUSTOMER_PERIOD_ARCHIVED',
+        entityType: 'orders',
+        entityId: `${body.fromDate}_${body.toDate}`,
+        after: {
+          fromDate: body.fromDate,
+          toDate: body.toDate,
+          orderCount: result.orderCount,
+        },
+      });
+    }
+
+    return {
+      dryRun,
+      fromDate: body.fromDate,
+      toDate: body.toDate,
+      orderCount: result.orderCount,
+      archived: !dryRun,
+    };
   }
 
   @Get('admin/customers/:id')
@@ -731,6 +776,46 @@ export class AdminOrdersController {
       }
     }
   }
+}
+
+/** Inclusive UK calendar dates → `[from, toExclusive)` in UTC instants. */
+function ukInclusiveDayRange(fromDate: string, toDate: string): {
+  from: Date;
+  toExclusive: Date;
+} {
+  const from = startOfUkDay(new Date(`${fromDate}T12:00:00.000Z`));
+  const toDayStart = startOfUkDay(new Date(`${toDate}T12:00:00.000Z`));
+  if (toDayStart.getTime() < from.getTime()) {
+    throw new ValidationException(
+      'Archive end date must be on or after the start date',
+      'BAD_REQUEST',
+    );
+  }
+  // Next London midnight after toDate (handles GMT/BST day lengths).
+  const toExclusive = startOfUkDay(
+    new Date(toDayStart.getTime() + 36 * 60 * 60 * 1000),
+  );
+  return { from, toExclusive };
+}
+
+/** Midnight in Europe/London for the given instant (handles GMT/BST). */
+function startOfUkDay(now: Date): Date {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const elapsedMs =
+    ((get('hour') * 60 + get('minute')) * 60 + get('second')) * 1000 +
+    now.getMilliseconds();
+  return new Date(now.getTime() - elapsedMs);
 }
 
 function constantTimeEquals(a: string, b: string): boolean {

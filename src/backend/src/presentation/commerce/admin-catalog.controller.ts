@@ -589,6 +589,14 @@ export class AdminCatalogController {
     return this.catalog.updateDepartment(id, body);
   }
 
+  @Delete('admin/departments/:id')
+  @UseGuards(AdminAuthGuard, PermissionsGuard)
+  @RequirePermissions(Permission.CATALOG_WRITE)
+  async deleteDepartment(@Param('id', new ParseUUIDPipe()) id: string) {
+    await this.uow.run(() => this.catalog.deleteDepartment(id));
+    return { deleted: true };
+  }
+
   @Post('admin/categories')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.CATALOG_WRITE)

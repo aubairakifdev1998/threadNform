@@ -71,6 +71,7 @@ export class PurgeCustomerUseCase {
         page,
         pageSize: 100,
         customerId: customer.id,
+        includeArchived: true,
       });
       allOrders.push(...batch.items);
       if (batch.items.length < 100) break;

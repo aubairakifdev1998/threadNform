@@ -8,6 +8,7 @@ import {
   gte,
   ilike,
   inArray,
+  isNull,
   lt,
   ne,
   or,
@@ -396,8 +397,12 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     status?: string;
     paymentStatus?: string;
     q?: string;
+    includeArchived?: boolean;
   }): Promise<{ items: Order[]; total: number }> {
     const filters: SQL[] = [];
+    if (!params.includeArchived) {
+      filters.push(isNull(orders.archivedAt));
+    }
     if (params.customerId && params.email) {
       // Owned orders + unclaimed guest orders placed with this email
       filters.push(
@@ -496,7 +501,8 @@ export class SupabaseCommerceRepository implements CommerceRepository {
           grandTotalPence: orders.grandTotalPence,
           placedAt: orders.placedAt,
         })
-        .from(orders),
+        .from(orders)
+        .where(isNull(orders.archivedAt)),
       this.db
         .select({
           orderId: orderItems.orderId,
@@ -505,7 +511,9 @@ export class SupabaseCommerceRepository implements CommerceRepository {
         })
         .from(orderItems)
         .innerJoin(orders, eq(orderItems.orderId, orders.id))
-        .where(ne(orders.status, 'CANCELLED')),
+        .where(
+          and(ne(orders.status, 'CANCELLED'), isNull(orders.archivedAt)),
+        ),
       this.db
         .select({
           id: customers.id,
@@ -651,6 +659,54 @@ export class SupabaseCommerceRepository implements CommerceRepository {
     const items = entries.slice(offset, offset + params.pageSize);
 
     return { items, total };
+  }
+
+  async archiveOrdersByPeriod(params: {
+    from: Date;
+    toExclusive: Date;
+    dryRun?: boolean;
+  }): Promise<{ orderCount: number; from: Date; toExclusive: Date }> {
+    if (!(params.from instanceof Date) || Number.isNaN(params.from.getTime())) {
+      throw new ValidationException('Invalid archive start date', 'BAD_REQUEST');
+    }
+    if (
+      !(params.toExclusive instanceof Date) ||
+      Number.isNaN(params.toExclusive.getTime())
+    ) {
+      throw new ValidationException('Invalid archive end date', 'BAD_REQUEST');
+    }
+    if (params.toExclusive.getTime() <= params.from.getTime()) {
+      throw new ValidationException(
+        'Archive end date must be on or after the start date',
+        'BAD_REQUEST',
+      );
+    }
+
+    const inPeriod = and(
+      isNull(orders.archivedAt),
+      gte(orders.placedAt, params.from),
+      lt(orders.placedAt, params.toExclusive),
+    );
+
+    const [countRow] = await this.db
+      .select({ value: count() })
+      .from(orders)
+      .where(inPeriod);
+    const orderCount = Number(countRow?.value ?? 0);
+
+    if (!params.dryRun && orderCount > 0) {
+      const now = new Date();
+      await this.db
+        .update(orders)
+        .set({ archivedAt: now, updatedAt: now })
+        .where(inPeriod);
+    }
+
+    return {
+      orderCount,
+      from: params.from,
+      toExclusive: params.toExclusive,
+    };
   }
 
   async listOrderTimeline(
@@ -938,6 +994,9 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       );
     }
 
+    // Archived period orders stay out of the payments queue/portal.
+    filters.push(isNull(orders.archivedAt));
+
     const where = filters.length ? and(...filters) : undefined;
     const offset = (params.page - 1) * params.pageSize;
 
@@ -1104,21 +1163,30 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       this.db
         .select({ value: count() })
         .from(orders)
-        .where(gte(orders.placedAt, today)),
+        .where(and(gte(orders.placedAt, today), isNull(orders.archivedAt))),
       this.db
         .select({ value: count() })
         .from(payments)
-        .where(inArray(payments.status, ['PROOF_SUBMITTED', 'UNDER_REVIEW'])),
+        .innerJoin(orders, eq(payments.orderId, orders.id))
+        .where(
+          and(
+            inArray(payments.status, ['PROOF_SUBMITTED', 'UNDER_REVIEW']),
+            isNull(orders.archivedAt),
+          ),
+        ),
       this.db
         .select({ value: count() })
         .from(orders)
         .where(
-          inArray(orders.status, [
-            'CONFIRMED',
-            'PROCESSING',
-            'PACKED',
-            'PARTIALLY_SHIPPED',
-          ]),
+          and(
+            inArray(orders.status, [
+              'CONFIRMED',
+              'PROCESSING',
+              'PACKED',
+              'PARTIALLY_SHIPPED',
+            ]),
+            isNull(orders.archivedAt),
+          ),
         ),
       this.db
         .select({ value: count() })
@@ -1142,6 +1210,7 @@ export class SupabaseCommerceRepository implements CommerceRepository {
           and(
             eq(orders.paymentStatus, 'VERIFIED'),
             gte(orders.placedAt, today),
+            isNull(orders.archivedAt),
           ),
         ),
     ]);
@@ -1456,6 +1525,7 @@ export class SupabaseCommerceRepository implements CommerceRepository {
       trackingUrl: row.trackingUrl ?? null,
       refundedPence: row.refundedPence ?? 0,
       placedAt: row.placedAt,
+      archivedAt: row.archivedAt ? new Date(row.archivedAt) : null,
     };
   }
 

@@ -140,6 +140,8 @@ export interface CatalogRepository {
       isActive: boolean;
     }>,
   ): Promise<Department>;
+  /** Deletes a department with no live categories/products depending on it. */
+  deleteDepartment(id: string): Promise<void>;
   listCategories(departmentId?: string): Promise<Category[]>;
   createCategory(input: {
     departmentId: string;

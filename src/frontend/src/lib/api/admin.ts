@@ -601,6 +601,25 @@ export const adminApi = {
     });
   },
 
+  /** Soft-archive orders in an inclusive UK date range (or dry-run count). */
+  archiveCustomerPeriod(
+    accessToken: string,
+    body: { fromDate: string; toDate: string; dryRun?: boolean },
+  ) {
+    return apiRequest<{
+      dryRun: boolean;
+      fromDate: string;
+      toDate: string;
+      orderCount: number;
+      archived: boolean;
+    }>("/admin/customers/archive-period", {
+      method: "POST",
+      accessToken,
+      body,
+      cache: "no-store",
+    });
+  },
+
   getCustomer(accessToken: string, id: string) {
     return apiRequest<{
       id: string;

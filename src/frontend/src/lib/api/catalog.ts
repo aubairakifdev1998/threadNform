@@ -19,8 +19,10 @@ export const catalogApi = {
   },
 
   getFilters() {
+    // Admin can create/hide/delete departments & categories at any time —
+    // never serve a stale homepage/nav taxonomy after those edits.
     return apiRequest<CatalogFilters>("/catalog/filters", {
-      next: { revalidate: 300 },
+      cache: "no-store",
     });
   },
 
@@ -39,14 +41,14 @@ export const catalogApi = {
 
   listDepartments() {
     return apiRequest<CatalogFilters["departments"]>("/departments", {
-      next: { revalidate: 300 },
+      cache: "no-store",
     });
   },
 
   listCategories(departmentId?: string) {
     return apiRequest<CatalogFilters["categories"]>("/categories", {
       searchParams: { departmentId },
-      next: { revalidate: 300 },
+      cache: "no-store",
     });
   },
 

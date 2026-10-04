@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowRight } from "lucide-react";
@@ -68,6 +69,9 @@ export function CategoryCard({
   item: CategoryOneItem;
   className?: string;
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const showImage = Boolean(item.imageSrc) && !imageFailed;
+
   return (
     <Link href={item.href} className="block">
       <motion.div
@@ -77,13 +81,14 @@ export function CategoryCard({
         )}
       >
         <div className="absolute inset-0">
-          {item.imageSrc ? (
+          {showImage ? (
             <Image
-              src={item.imageSrc}
+              src={item.imageSrc!}
               alt=""
               fill
               className="object-cover transition-transform duration-500 group-hover:scale-110"
               sizes="(max-width: 768px) 100vw, 33vw"
+              onError={() => setImageFailed(true)}
             />
           ) : (
             <div className="h-full w-full bg-secondary" />

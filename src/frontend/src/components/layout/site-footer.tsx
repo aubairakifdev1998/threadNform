@@ -1,12 +1,40 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { BrandMark } from "@/components/layout/brand-mark";
 import { useAuth } from "@/components/auth/auth-provider";
+import { catalogApi } from "@/lib/api";
 import { BRAND } from "@/lib/brand";
 
 export function SiteFooter() {
   const { isLoggedIn, user } = useAuth();
+  const [departmentLinks, setDepartmentLinks] = useState<
+    Array<{ href: string; label: string }>
+  >([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void catalogApi
+      .listDepartments()
+      .then((departments) => {
+        if (cancelled) return;
+        setDepartmentLinks(
+          (departments ?? [])
+            .filter((d) => d.isActive !== false)
+            .map((d) => ({
+              href: `/category/${d.slug}`,
+              label: d.name,
+            })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setDepartmentLinks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const companyLinks = isLoggedIn
     ? [
@@ -25,8 +53,7 @@ export function SiteFooter() {
       title: "Shop",
       links: [
         { href: "/shop", label: "All products" },
-        { href: "/category/women", label: "Women" },
-        { href: "/category/men", label: "Men" },
+        ...departmentLinks,
       ],
     },
     {

@@ -25,21 +25,31 @@ import { cn } from "@/lib/utils";
 /** Prefer a rendered node from Server Components; component refs stay OK in client trees. */
 export type StateIcon = ReactNode | ComponentType<{ className?: string }>;
 
+function isComponentType(
+  value: unknown,
+): value is ComponentType<{ className?: string }> {
+  if (typeof value === "function") return true;
+  if (typeof value !== "object" || value === null) return false;
+  // lucide / forwardRef / memo exotic components
+  return "$$typeof" in value && "render" in value;
+}
+
 function resolveStateIcon(
   icon: StateIcon | undefined,
   Fallback: ComponentType<{ className?: string }>,
 ): ReactNode {
   if (icon == null) return <Fallback className="size-4.5" />;
-  if (isValidElement(icon) || typeof icon === "string" || typeof icon === "number") {
+  if (isValidElement(icon)) return icon;
+  if (
+    typeof icon === "string" ||
+    typeof icon === "number" ||
+    typeof icon === "bigint" ||
+    typeof icon === "boolean"
+  ) {
     return icon;
   }
-  if (typeof icon === "function") {
+  if (isComponentType(icon)) {
     const Icon = icon;
-    return <Icon className="size-4.5" />;
-  }
-  // lucide / forwardRef exotic components are objects with $$typeof + render
-  if (typeof icon === "object" && icon !== null && "render" in icon) {
-    const Icon = icon as unknown as ComponentType<{ className?: string }>;
     return <Icon className="size-4.5" />;
   }
   return <Fallback className="size-4.5" />;

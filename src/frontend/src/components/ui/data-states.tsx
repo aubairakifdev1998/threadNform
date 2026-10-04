@@ -39,7 +39,7 @@ function resolveStateIcon(
   }
   // lucide / forwardRef exotic components are objects with $$typeof + render
   if (typeof icon === "object" && icon !== null && "render" in icon) {
-    const Icon = icon as ComponentType<{ className?: string }>;
+    const Icon = icon as unknown as ComponentType<{ className?: string }>;
     return <Icon className="size-4.5" />;
   }
   return <Fallback className="size-4.5" />;

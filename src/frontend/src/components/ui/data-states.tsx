@@ -1,6 +1,10 @@
 "use client";
 
-import type { ComponentType, ReactNode } from "react";
+import {
+  isValidElement,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import {
   AlertTriangle,
   Inbox,
@@ -18,15 +22,38 @@ import { cn } from "@/lib/utils";
  * that previously made outages look like an empty catalogue.
  */
 
+/** Prefer a rendered node from Server Components; component refs stay OK in client trees. */
+export type StateIcon = ReactNode | ComponentType<{ className?: string }>;
+
+function resolveStateIcon(
+  icon: StateIcon | undefined,
+  Fallback: ComponentType<{ className?: string }>,
+): ReactNode {
+  if (icon == null) return <Fallback className="size-4.5" />;
+  if (isValidElement(icon) || typeof icon === "string" || typeof icon === "number") {
+    return icon;
+  }
+  if (typeof icon === "function") {
+    const Icon = icon;
+    return <Icon className="size-4.5" />;
+  }
+  // lucide / forwardRef exotic components are objects with $$typeof + render
+  if (typeof icon === "object" && icon !== null && "render" in icon) {
+    const Icon = icon as ComponentType<{ className?: string }>;
+    return <Icon className="size-4.5" />;
+  }
+  return <Fallback className="size-4.5" />;
+}
+
 function StateShell({
-  icon: Icon,
+  icon,
   tone = "neutral",
   title,
   description,
   action,
   className,
 }: {
-  icon: ComponentType<{ className?: string }>;
+  icon: ReactNode;
   tone?: "neutral" | "danger";
   title: string;
   description?: ReactNode;
@@ -49,7 +76,7 @@ function StateShell({
             : "border-border bg-secondary text-foreground",
         )}
       >
-        <Icon className="size-4.5" />
+        {icon}
       </span>
       <div className="space-y-1.5">
         <p className="text-sm font-medium text-foreground">{title}</p>
@@ -66,13 +93,14 @@ function StateShell({
 
 /** Nothing here yet, and that is a valid outcome. Always offer a next step. */
 export function EmptyState({
-  icon = Inbox,
+  icon,
   title,
   description,
   action,
   className,
 }: {
-  icon?: ComponentType<{ className?: string }>;
+  /** Pass JSX (`<Icon />`) from Server Components — bare component refs cannot cross the RSC boundary. */
+  icon?: StateIcon;
   title: string;
   description?: ReactNode;
   action?: ReactNode;
@@ -80,7 +108,7 @@ export function EmptyState({
 }) {
   return (
     <StateShell
-      icon={icon}
+      icon={resolveStateIcon(icon, Inbox)}
       title={title}
       description={description}
       action={action}
@@ -170,7 +198,7 @@ export function ErrorState({
   const shape = describeError(error);
   return (
     <StateShell
-      icon={shape.icon}
+      icon={resolveStateIcon(shape.icon, AlertTriangle)}
       tone="danger"
       title={title ?? shape.title}
       description={description ?? shape.description}
@@ -202,7 +230,7 @@ export function PermissionState({
 }) {
   return (
     <StateShell
-      icon={Lock}
+      icon={resolveStateIcon(undefined, Lock)}
       title={title}
       description={description}
       action={action}

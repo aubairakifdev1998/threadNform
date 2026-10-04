@@ -16,7 +16,7 @@ export function ProductGrid({
   if (!products.length) {
     return (
       <EmptyState
-        icon={PackageSearch}
+        icon={<PackageSearch className="size-4.5" />}
         title="Nothing to show yet"
         description={emptyMessage}
         action={
